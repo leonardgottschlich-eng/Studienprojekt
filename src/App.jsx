@@ -1175,11 +1175,9 @@ export default function App() {
     showNotification("Beleg verworfen", "error");
   };
 
-  const filteredDocs = docs.filter((d) => d.name.toLowerCase().includes(searchQuery.toLowerCase()) || d.category.toLowerCase().includes(searchQuery.toLowerCase()));
-  const stats = { total: docs.length, analysiert: docs.filter((d) => d.status === "analysiert").length, ausstehend: docs.filter((d) => d.status === "ausstehend").length };
   const filteredDocs = docs.filter((d) =>
-      d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      d.category.toLowerCase().includes(searchQuery.toLowerCase())
+    d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    d.category.toLowerCase().includes(searchQuery.toLowerCase())
   );
   const stats = {
     total: docs.length,
@@ -1526,29 +1524,22 @@ export default function App() {
           ))}
         </nav>
 
+        {/* Detail Modal */}
+        {selectedDoc && (
+          <DocDetailModal
+            doc={selectedDoc}
+            onClose={() => setSelectedDoc(null)}
+            onConfirm={(editedData) => handleConfirm(selectedDoc.id, editedData)}
+            onDiscard={() => handleDiscard(selectedDoc.id)}
+          />
+        )}
+
         {/* Toast-Notification */}
         {notification && (
-            <div style={{ position: "fixed", bottom: 24, right: 24, background: notification.type === "error" ? "#fef2f2" : "#f0fdf4", border: `1px solid ${notification.type === "error" ? "#fca5a5" : "#86efac"}`, color: notification.type === "error" ? "#dc2626" : "#16a34a", padding: "11px 16px", borderRadius: 9, fontSize: 13, fontWeight: 500, boxShadow: "0 4px 20px rgba(0,0,0,.08)", animation: "slideIn .3s ease", zIndex: 1000, display: "flex", alignItems: "center", gap: 7 }}>
-              {notification.type === "error" ? <i className="bi bi-exclamation-triangle-fill"/> : <i className="bi-check2" />} {notification.msg}
-            </div>
+          <div style={{ position: "fixed", bottom: 24, right: 24, background: notification.type === "error" ? "#fef2f2" : "#f0fdf4", border: `1px solid ${notification.type === "error" ? "#fca5a5" : "#86efac"}`, color: notification.type === "error" ? "#dc2626" : "#16a34a", padding: "11px 16px", borderRadius: 9, fontSize: 13, fontWeight: 500, boxShadow: "0 4px 20px rgba(0,0,0,.08)", animation: "slideIn .3s ease", zIndex: 1000, display: "flex", alignItems: "center", gap: 7 }}>
+            {notification.type === "error" ? <i className="bi bi-exclamation-triangle-fill" /> : <i className="bi bi-check2" />} {notification.msg}
+          </div>
         )}
       </div>
-      {/* Detail Modal */}
-      {selectedDoc && (
-        <DocDetailModal
-          doc={selectedDoc}
-          onClose={() => setSelectedDoc(null)}
-          onConfirm={(editedData) => handleConfirm(selectedDoc.id, editedData)}
-          onDiscard={() => handleDiscard(selectedDoc.id)}
-        />
-      )}
-
-     {/* Toast-Notification */}
-        {notification && (
-            <div style={{ position: "fixed", bottom: 24, right: 24, background: notification.type === "error" ? "#fef2f2" : "#f0fdf4", border: `1px solid ${notification.type === "error" ? "#fca5a5" : "#86efac"}`, color: notification.type === "error" ? "#dc2626" : "#16a34a", padding: "11px 16px", borderRadius: 9, fontSize: 13, fontWeight: 500, boxShadow: "0 4px 20px rgba(0,0,0,.08)", animation: "slideIn .3s ease", zIndex: 1000, display: "flex", alignItems: "center", gap: 7 }}>
-             {notification.type === "error" ? <i className="bi bi-exclamation-triangle-fill"/> : <i className="bi-check2" />} {notification.msg}
-            </div>
-        )}
-    </div>
-  );
+    );
 }
