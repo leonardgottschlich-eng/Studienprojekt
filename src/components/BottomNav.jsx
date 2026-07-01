@@ -1,10 +1,9 @@
-export default function BottomNav({ onScanClick }) {
+export default function BottomNav() {
   return (
     <nav className="bottom-nav" style={{ position: "fixed", bottom: 0, left: 0, right: 0, height: 64, background: "#0b2e44", borderTop: "1px solid rgba(255,255,255,.08)", zIndex: 150, alignItems: "center", justifyContent: "space-around", padding: "0 8px" }}>
       {[
         { icon: "bi-border-all",    label: "Dashboard" },
         { icon: "bi-folder-fill",   label: "Belege",    active: true },
-        { icon: "bi-upc-scan",      label: "Scannen",   action: onScanClick },
         { icon: "bi-bar-chart-line",label: "Auswertung" },
       ].map((item) => (
         <button key={item.label} onClick={item.action || undefined}

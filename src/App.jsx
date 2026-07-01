@@ -12,7 +12,7 @@ import BottomNav from "./components/BottomNav";
 import DocumentScanModal from "./components/DocumentScanModal";
 import DocDetailModal from "./components/DocDetailModal";
 
-export default function App() {
+export default function App({ user, onLogout }) {
   const [allDocs, setAllDocs]         = useState({ ...DOCS_BY_MANDANT });
   const [currentMandant, setCurrentMandant] = useState(MANDANTEN[0]);
   const [dragging, setDragging]       = useState(false);
@@ -33,6 +33,18 @@ export default function App() {
   const showNotification = (msg, type = "success") => {
     setNotification({ msg, type });
     setTimeout(() => setNotification(null), 3500);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
+      });
+    } catch {
+      // Server-Logout optional – Frontend meldet trotzdem ab
+    }
+    onLogout?.();
   };
 
   const { uploading, uploadProgress, uploadToLocal } = useUpload(currentMandant, setAllDocs, showNotification);
@@ -148,7 +160,7 @@ export default function App() {
         <MobileTopbar onMenuClick={() => setSidebarOpen((v) => !v)} onCameraClick={() => setCameraOpen(true)} />
 
         {/* Sidebar */}
-        <Sidebar currentMandant={currentMandant} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} />
+        <Sidebar currentMandant={currentMandant} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} />
 
         {/* Main */}
         <main className="main-content" style={{ marginLeft: 240, flex: 1, minWidth: 0, padding: isMobile ? "90px 16px 84px" : "30px 32px", animation: "fadeUp .4s ease", display: "flex", justifyContent: "center", background: "#f8f7f4" }}>
@@ -259,7 +271,7 @@ export default function App() {
         </main>
 
         {/* Bottom Nav */}
-        <BottomNav onScanClick={() => setCameraOpen(true)} />
+        <BottomNav/>
 
         {/* Toast */}
         {notification && (

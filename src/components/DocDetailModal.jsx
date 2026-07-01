@@ -31,7 +31,7 @@ function ConfidenceRing({ value }) {
   );
 }
 
-/* ── Scan Preview ────────────────────────────────────────────── */
+/* ── Scan Preview ── */
 function ScanPreview({ doc }) {
   if (doc.scanPreview === "totalenergies") {
     return (
@@ -277,12 +277,12 @@ export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
               {editMode ? "✏️ Bearbeitungsmodus aktiv — Felder können geändert werden" : "Klicke auf einen Eintrag um Details anzuzeigen"}
             </div>
             <div style={{ display: "flex", gap: 10 }}>
-              {/* Verwerfen */}
+              {/* Löschen */}
               <button onClick={onDiscard}
                       style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 18px", background: "#fff", border: "1px solid #fca5a5", borderRadius: 9, fontSize: 13, fontWeight: 600, color: "#dc2626", cursor: "pointer", transition: "all .15s" }}
                       onMouseEnter={e => e.currentTarget.style.background = "#fef2f2"}
                       onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
-                <i className="bi bi-trash3" /> Verwerfen
+                <i className="bi bi-trash3" /> Löschen
               </button>
 
               {/* Bearbeiten / Speichern */}
@@ -313,5 +313,3 @@ export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
       </div>
   );
 }
-
-/* ══════════════════════════════════════════════════════════════ */

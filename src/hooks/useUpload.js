@@ -1,12 +1,15 @@
 import { useState } from "react";
 
+// Token aus sessionStorage holen
+const getToken = () => sessionStorage.getItem("bs_token") || "";
+
 export function useUpload(currentMandant, setAllDocs, showNotification) {
-  const [uploading, setUploading]         = useState(false);
+  const [uploading, setUploading]           = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
   const uploadToLocal = async (files) => {
     const validFiles = Array.from(files).filter(
-      (f) => f.type === "application/pdf" || f.type.startsWith("image/")
+        (f) => f.type === "application/pdf" || f.type.startsWith("image/")
     );
     if (!validFiles.length) {
       showNotification("Nur PDF oder Bilddateien erlaubt.", "error");
@@ -23,9 +26,19 @@ export function useUpload(currentMandant, setAllDocs, showNotification) {
         const formData = new FormData();
         formData.append("file", file);
         const response = await fetch(
-          `/api/upload?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}`,
-          { method: "POST", body: formData }
+            `/api/upload?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}`,
+            {
+              method: "POST",
+              headers: { Authorization: `Bearer ${getToken()}` },
+              body: formData,
+            }
         );
+        if (response.status === 401) {
+          showNotification("Sitzung abgelaufen – bitte neu anmelden.", "error");
+          sessionStorage.clear();
+          window.location.reload();
+          return;
+        }
         if (!response.ok) throw new Error("Server Fehler");
         const result = await response.json();
         if (result.success) {
