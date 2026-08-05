@@ -53,7 +53,9 @@ export default function App({ user, onLogout }) {
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch(`/api/belege?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}`);
+        const res = await fetch(`/api/belege?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}`, {
+          headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
+        });
         if (!res.ok) return;
         const { files } = await res.json();
         if (!files?.length) return;
@@ -97,7 +99,7 @@ export default function App({ user, onLogout }) {
   };
 
   const handleConfirm = (docId, editedData) => {
-    setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map(d => d.id === docId ? { ...d, status: "analysiert", extractedData: editedData, amount: editedData.gesamtBetrag } : d) }));
+    setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map(d => d.id === docId ? { ...d, status: "analysiert", extractedData: editedData, amount: editedData.angerechnetBetrag ?? editedData.gesamtBetrag } : d) }));
     setSelectedDoc(null);
     showNotification("Beleg bestätigt und gespeichert ✓");
   };

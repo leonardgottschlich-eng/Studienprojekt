@@ -146,10 +146,82 @@ function FieldRow({ label, fieldKey, wide, editMode, edited, setEdited, ed }) {
   );
 }
 
+/* Wandelt "1.234,56 €" in 1234.56 um */
+function parseBetrag(str) {
+  if (!str) return 0;
+  const n = parseFloat(String(str).replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", "."));
+  return isNaN(n) ? 0 : n;
+}
+
+function formatBetrag(n) {
+  return n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+}
+
+/**
+ * Berechnet die steuerlich anrechenbaren Werte aus den angehakten Positionen.
+ * Gruppiert nach Steuersatz, weil ein Beleg mehrere Sätze enthalten kann
+ * (z. B. 7 % Übernachtung + 19 % Frühstück).
+ */
+function berechneAnrechnung(positionen, included) {
+  const nachSatz = new Map();
+  let netto = 0, vorsteuer = 0, brutto = 0, ausgenommenBrutto = 0;
+
+  (positionen ?? []).forEach((p, i) => {
+    const pNetto  = parseBetrag(p.netto);
+    const pSteuer = parseBetrag(p.mwstBetrag);
+    const pBrutto = parseBetrag(p.betrag);
+
+    if (!included[i]) {
+      ausgenommenBrutto += pBrutto;
+      return;
+    }
+    netto     += pNetto;
+    vorsteuer += pSteuer;
+    brutto    += pBrutto;
+
+    const satz = Number(p.mwstSatz) || 0;
+    const eintrag = nachSatz.get(satz) ?? { satz, netto: 0, steuer: 0 };
+    eintrag.netto  += pNetto;
+    eintrag.steuer += pSteuer;
+    nachSatz.set(satz, eintrag);
+  });
+
+  return {
+    netto, vorsteuer, brutto, ausgenommenBrutto,
+    saetze: [...nachSatz.values()].sort((a, b) => b.satz - a.satz),
+  };
+}
+
 export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
   const [editMode, setEditMode] = useState(false);
   const [edited, setEdited] = useState({ ...doc.extractedData });
+  const [included, setIncluded] = useState(
+      () => (doc.extractedData.positionen ?? []).map(p => p.angerechnet !== false)
+  );
   const ed = doc.extractedData;
+
+  const positionen = editMode ? edited.positionen : ed.positionen;
+  const calc = berechneAnrechnung(positionen, included);
+  const ausgeschlossen = included.filter(v => !v).length;
+
+  const toggleIncluded = (i) => setIncluded(prev => prev.map((v, ii) => ii === i ? !v : v));
+
+  // Beim Speichern: Checkbox-Flags übernehmen und alle Summen aus den
+  // (ggf. bearbeiteten) Positionen neu berechnen. gesamtBetrag = Beleg gesamt,
+  // angerechnetBetrag = Brutto nur der angehakten Positionen.
+  const withFlags = (data) => {
+    const pos = data.positionen ?? [];
+    const alle = berechneAnrechnung(pos, pos.map(() => true));
+    const anrechenbar = berechneAnrechnung(pos, included);
+    return {
+      ...data,
+      positionen: pos.map((p, i) => ({ ...p, angerechnet: included[i] })),
+      nettoBetrag: formatBetrag(alle.netto),
+      mwstBetrag: formatBetrag(alle.vorsteuer),
+      gesamtBetrag: formatBetrag(alle.brutto),
+      angerechnetBetrag: formatBetrag(anrechenbar.brutto),
+    };
+  };
 
   const fieldStyle = {
     width: "100%", padding: "7px 10px", border: "1px solid #e5e7eb",
@@ -219,52 +291,120 @@ export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
 
               {/* Positionen */}
               <div style={{ marginBottom: 20 }}>
-                <span style={labelStyle}>POSITIONEN</span>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                  <span style={labelStyle}>POSITIONEN</span>
+                  <span style={{ fontSize: 10, color: "#9ca3af" }}>Haken entfernen, um eine Position von der Anrechnung auszunehmen</span>
+                </div>
                 <div style={{ background: "#fafaf8", borderRadius: 8, border: "1px solid #f0ece4", overflow: "hidden" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", padding: "7px 12px", background: "#f5f3ef", borderBottom: "1px solid #ede9e0" }}>
-                    {["Bezeichnung", "Menge", "Einzelpreis", "Betrag"].map(h => (
-                        <span key={h} style={{ fontSize: 9.5, fontWeight: 700, color: "#9ca3af", letterSpacing: ".05em" }}>{h.toUpperCase()}</span>
+                  <div style={{ display: "grid", gridTemplateColumns: "26px 2.2fr 1fr 46px 1fr", gap: 8, padding: "7px 12px", background: "#f5f3ef", borderBottom: "1px solid #ede9e0" }}>
+                    <span style={{ fontSize: 9.5, fontWeight: 700, color: "#9ca3af" }} title="Steuerlich anrechnen">✓</span>
+                    {["Bezeichnung", "Netto", "MwSt", "Brutto"].map((h, hi) => (
+                        <span key={h} style={{ fontSize: 9.5, fontWeight: 700, color: "#9ca3af", letterSpacing: ".05em", textAlign: hi > 0 ? "right" : "left" }}>{h.toUpperCase()}</span>
                     ))}
                   </div>
-                  {(editMode ? edited.positionen : ed.positionen)?.map((p, i) => (
-                      <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", padding: "8px 12px", borderBottom: i < ed.positionen.length - 1 ? "1px solid #f0ece4" : "none", alignItems: "center" }}>
-                        {editMode ? (
-                            ["bezeichnung", "menge", "einzelpreis", "betrag"].map(k => (
-                                <input key={k} style={{ ...fieldStyle, padding: "4px 6px", fontSize: 11.5 }}
-                                       value={edited.positionen[i][k]}
-                                       onChange={e => setEdited(prev => {
-                                         const pos = prev.positionen.map((pp, ii) => ii === i ? { ...pp, [k]: e.target.value } : pp);
-                                         return { ...prev, positionen: pos };
-                                       })} />
-                            ))
-                        ) : (
-                            <>
-                              <span style={{ fontSize: 12, color: "#111827", fontWeight: 500 }}>{p.bezeichnung}</span>
-                              <span style={{ fontSize: 11.5, color: "#6b7280" }}>{p.menge}</span>
-                              <span style={{ fontSize: 11.5, color: "#6b7280" }}>{p.einzelpreis}</span>
-                              <span style={{ fontSize: 12, fontWeight: 600, color: "#0b2e44" }}>{p.betrag}</span>
-                            </>
-                        )}
-                      </div>
-                  ))}
+                  {positionen?.map((p, i) => {
+                    const on = included[i];
+                    const strike = on ? "none" : "line-through";
+                    return (
+                        <div key={i} style={{ display: "grid", gridTemplateColumns: "26px 2.2fr 1fr 46px 1fr", gap: 8, padding: "8px 12px", borderBottom: i < positionen.length - 1 ? "1px solid #f0ece4" : "none", alignItems: "center", background: on ? "transparent" : "#faf7f4", opacity: on ? 1 : 0.5, transition: "all .15s" }}>
+                          <input
+                              type="checkbox"
+                              checked={on}
+                              onChange={() => toggleIncluded(i)}
+                              title={on ? "Position wird angerechnet" : "Position ist ausgenommen"}
+                              style={{ width: 15, height: 15, accentColor: "#16a34a", cursor: "pointer", margin: 0 }}
+                          />
+                          {editMode ? (
+                              <>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                  <input style={{ ...fieldStyle, padding: "4px 6px", fontSize: 11.5 }}
+                                         value={edited.positionen[i].bezeichnung}
+                                         onChange={e => setEdited(prev => ({ ...prev, positionen: prev.positionen.map((pp, ii) => ii === i ? { ...pp, bezeichnung: e.target.value } : pp) }))} />
+                                  <div style={{ display: "flex", gap: 3 }}>
+                                    {["menge", "einzelpreis"].map(k => (
+                                        <input key={k} placeholder={k} style={{ ...fieldStyle, padding: "3px 5px", fontSize: 10 }}
+                                               value={edited.positionen[i][k]}
+                                               onChange={e => setEdited(prev => ({ ...prev, positionen: prev.positionen.map((pp, ii) => ii === i ? { ...pp, [k]: e.target.value } : pp) }))} />
+                                    ))}
+                                  </div>
+                                </div>
+                                {["netto", "mwstSatz", "betrag"].map(k => (
+                                    <input key={k} style={{ ...fieldStyle, padding: "4px 6px", fontSize: 11, textAlign: "right" }}
+                                           value={edited.positionen[i][k]}
+                                           onChange={e => setEdited(prev => ({ ...prev, positionen: prev.positionen.map((pp, ii) => ii === i ? { ...pp, [k]: k === "mwstSatz" ? e.target.value.replace(/\D/g, "") : e.target.value } : pp) }))} />
+                                ))}
+                              </>
+                          ) : (
+                              <>
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontSize: 12, color: "#111827", fontWeight: 500, textDecoration: strike }}>{p.bezeichnung}</div>
+                                  <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1 }}>{p.menge} × {p.einzelpreis}</div>
+                                </div>
+                                <span style={{ fontSize: 11.5, color: "#374151", textAlign: "right", textDecoration: strike }}>{p.netto}</span>
+                                <span style={{ fontSize: 10.5, color: "#9ca3af", textAlign: "right" }}>{p.mwstSatz} %</span>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: on ? "#0b2e44" : "#9ca3af", textAlign: "right", textDecoration: strike }}>{p.betrag}</span>
+                              </>
+                          )}
+                        </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* Beträge */}
-              <div style={{ background: "#f5f3ef", borderRadius: 8, padding: "12px 16px", marginBottom: 4 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px 20px" }}>
-                  <FieldRow label="Nettobetrag" fieldKey="nettoBetrag" editMode={editMode} edited={edited} setEdited={setEdited} ed={ed} />
-                  <FieldRow label="MwSt-Satz" fieldKey="mwstSatz" editMode={editMode} edited={edited} setEdited={setEdited} ed={ed} />
-                  <FieldRow label="MwSt-Betrag" fieldKey="mwstBetrag" editMode={editMode} edited={edited} setEdited={setEdited} ed={ed} />
+              {/* Steuerliche Auswertung — live aus den angehakten Positionen */}
+              <div style={{ background: "#f5f3ef", borderRadius: 8, padding: "14px 16px", marginBottom: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <span style={{ ...labelStyle, marginBottom: 0 }}>STEUERLICHE AUSWERTUNG</span>
+                  {ausgeschlossen > 0 && (
+                      <span style={{ fontSize: 10, fontWeight: 600, color: "#b45309", background: "#fef3c7", padding: "2px 8px", borderRadius: 10 }}>
+                      {ausgeschlossen} Position{ausgeschlossen > 1 ? "en" : ""} ausgenommen
+                    </span>
+                  )}
                 </div>
-                <div style={{ borderTop: "1px solid #e0dbd2", marginTop: 10, paddingTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: "#0b2e44" }}>GESAMTBETRAG</span>
-                  {editMode ? (
-                      <input style={{ ...fieldStyle, width: 140, textAlign: "right", fontWeight: 700, fontSize: 16 }}
-                             value={edited.gesamtBetrag}
-                             onChange={e => setEdited(p => ({ ...p, gesamtBetrag: e.target.value }))} />
-                  ) : (
-                      <span style={{ fontSize: 20, fontWeight: 800, color: "#0b2e44" }}>{ed.gesamtBetrag}</span>
+
+                {/* Aufteilung nach Steuersatz */}
+                {calc.saetze.length > 0 && (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "60px 1fr 1fr", gap: 8, paddingBottom: 4, borderBottom: "1px solid #e0dbd2", marginBottom: 4 }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: "#9ca3af" }}>SATZ</span>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: "#9ca3af", textAlign: "right" }}>NETTO</span>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: "#9ca3af", textAlign: "right" }}>VORSTEUER</span>
+                      </div>
+                      {calc.saetze.map(s => (
+                          <div key={s.satz} style={{ display: "grid", gridTemplateColumns: "60px 1fr 1fr", gap: 8, padding: "2px 0" }}>
+                            <span style={{ fontSize: 11.5, color: "#374151", fontWeight: 600 }}>{s.satz} %</span>
+                            <span style={{ fontSize: 11.5, color: "#374151", textAlign: "right" }}>{formatBetrag(s.netto)}</span>
+                            <span style={{ fontSize: 11.5, color: "#374151", textAlign: "right" }}>{formatBetrag(s.steuer)}</span>
+                          </div>
+                      ))}
+                    </div>
+                )}
+
+                {/* Die beiden Größen, die tatsächlich gebucht werden */}
+                <div style={{ borderTop: "1px solid #e0dbd2", paddingTop: 10, display: "flex", flexDirection: "column", gap: 7 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                    <span style={{ fontSize: 12, color: "#0b2e44", fontWeight: 600 }}>
+                      Betriebsausgabe <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}>(netto)</span>
+                    </span>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: "#0b2e44" }}>{formatBetrag(calc.netto)}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                    <span style={{ fontSize: 12, color: "#16a34a", fontWeight: 600 }}>
+                      Vorsteuer <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}>(§ 15 UStG)</span>
+                    </span>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: "#16a34a" }}>{formatBetrag(calc.vorsteuer)}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderTop: "1px dashed #d6cfc4", paddingTop: 7 }}>
+                    <span style={{ fontSize: 11, color: "#6b7280" }}>Brutto (Kontrolle)</span>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "#6b7280" }}>{formatBetrag(calc.brutto)}</span>
+                  </div>
+                </div>
+
+                {/* Abgleich mit dem Beleg */}
+                <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #e0dbd2", display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#9ca3af" }}>
+                  <span>Beleg gesamt: <strong style={{ color: "#6b7280" }}>{ed.gesamtBetrag}</strong></span>
+                  {calc.ausgenommenBrutto > 0 && (
+                      <span>davon ausgenommen: <strong style={{ color: "#b45309" }}>{formatBetrag(calc.ausgenommenBrutto)}</strong></span>
                   )}
                 </div>
               </div>
@@ -287,7 +427,7 @@ export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
 
               {/* Bearbeiten / Speichern */}
               {editMode ? (
-                  <button onClick={() => { setEditMode(false); onConfirm(edited); }}
+                  <button onClick={() => { setEditMode(false); onConfirm(withFlags(edited)); }}
                           style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 18px", background: "#18537a", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
                     <i className="bi bi-floppy" /> Änderungen speichern
                   </button>
@@ -302,7 +442,7 @@ export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
 
               {/* Bestätigen */}
               {!editMode && (
-                  <button onClick={() => onConfirm(ed)}
+                  <button onClick={() => onConfirm(withFlags(ed))}
                           style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 20px", background: "linear-gradient(135deg,#16a34a,#22c55e)", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer", boxShadow: "0 2px 8px rgba(22,163,74,.3)" }}>
                     <i className="bi bi-check2-circle" /> Bestätigen
                   </button>
