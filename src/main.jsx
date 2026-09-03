@@ -12,6 +12,7 @@ function Root() {
     const handleLogin  = (u) => setUser(u);
     const handleLogout = () => {
         sessionStorage.removeItem("bs_token");
+        sessionStorage.removeItem("bs_api_token");
         sessionStorage.removeItem("bs_user");
         setUser(null);
     };

@@ -1,19 +1,58 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import basicSsl from '@vitejs/plugin-basic-ssl'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// HTTPS-Zertifikat: Liegt in certs/ ein mkcert-Zertifikat (siehe certs/README.md),
+// wird es verwendet – dem vertrauen die Browser nach einmaligem Import der CA
+// ohne Warnungen. Sonst Fallback auf das Wegwerf-Zertifikat von basicSsl.
+// Mit NO_SSL=1 läuft der Server komplett ohne HTTPS (http://localhost:5173).
+const certDir   = path.join(path.dirname(fileURLToPath(import.meta.url)), 'certs')
+const hatMkcert = fs.existsSync(path.join(certDir, 'cert.key')) && fs.existsSync(path.join(certDir, 'cert.crt'))
+const ohneSsl   = !!process.env.NO_SSL
+
+// Unter HTTPS spricht der Dev-Server HTTP/2 mit dem Browser. Dort sind
+// verbindungsspezifische Header verboten – der Apache des Backends schickt aber
+// "Upgrade: h2", "Connection: Upgrade" und "Transfer-Encoding: chunked" mit.
+// Werden die durchgereicht, bricht der HTTP/2-Stream ab (im Browser:
+// NS_ERROR_NET_RESET). Deshalb hier entfernen; über HTTP/1.1 setzt Node die
+// korrekte Übertragung selbst wieder.
+const http2VertraeglicheHeader = (proxy) => {
+  proxy.on("proxyRes", (proxyRes) => {
+    for (const h of ["upgrade", "connection", "keep-alive", "transfer-encoding", "proxy-connection"]) {
+      delete proxyRes.headers[h]
+    }
+  })
+}
 
 export default defineConfig({
   plugins: [
     react(),
-    basicSsl()
+    ...(!ohneSsl && !hatMkcert ? [basicSsl()] : [])
   ],
   server: {
+    https: !ohneSsl && hatMkcert
+        ? {
+            key:  fs.readFileSync(path.join(certDir, 'cert.key')),
+            cert: fs.readFileSync(path.join(certDir, 'cert.crt')),
+          }
+        : undefined,
     proxy: {
       // Alle Anfragen an /api werden intern an den lokalen Server weitergeleitet
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
+        configure: http2VertraeglicheHeader,
+      },
+      // /backend → CodeIgniter-Backend mit MySQL-Datenbank (kein CORS nötig)
+      '/backend': {
+        target: 'https://app.billsquid.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/backend/, ''),
+        configure: http2VertraeglicheHeader,
       }
     }
   }

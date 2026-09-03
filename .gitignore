@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Lokale Dev-Zertifikate (private Schluessel nie committen)
+certs/*
+!certs/README.md

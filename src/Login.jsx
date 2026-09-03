@@ -13,26 +13,49 @@ export default function Login({ onLogin }) {
     setLoading(true);
 
     try {
-      const res = await fetch("/api/auth/login", {
+      // Login gegen das BillSquid-Backend (CodeIgniter + MySQL)
+      const res = await fetch("/backend/api/login", {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ email, password }),
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body:    JSON.stringify({ email, password, token_name: "billsquid-frontend" }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || "Login fehlgeschlagen.");
+        setError(data.message || "E-Mail oder Passwort falsch.");
         setLoading(false);
         return;
       }
 
+      // Backend-User → Anzeige-Format der App (name/rolle)
+      const rollen = { admin: "Admin", tax_advisor: "Steuerberater/in", client: "Mandant/in" };
+      const user = {
+        ...data.user,
+        name:  `${data.user.first_name || ""} ${data.user.last_name || ""}`.trim() || data.user.username,
+        rolle: rollen[(data.user.groups || []).find((g) => rollen[g])] || "Benutzer",
+      };
+
       // Token im sessionStorage speichern (bleibt bis Browser-Tab geschlossen)
-      sessionStorage.setItem("bs_token", data.token);
-      sessionStorage.setItem("bs_user",  JSON.stringify(data.user));
-      onLogin(data.user);
+      sessionStorage.setItem("bs_api_token", data.access_token);
+      sessionStorage.setItem("bs_user", JSON.stringify(user));
+
+      // Zusätzlich still am lokalen Scan-Server anmelden – der verwaltet
+      // Scanner-Eingang und Bild-Uploads. Ist er aus, fehlen nur diese Funktionen.
+      try {
+        const lokal = await fetch("/api/auth/login", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ email: "doerte@kanzlei.de", password: "billsquid123" }),
+        });
+        if (lokal.ok) sessionStorage.setItem("bs_token", (await lokal.json()).token);
+      } catch { /* Scanner-Funktionen dann inaktiv */ }
+
+      onLogin(user);
     } catch {
-      setError("Server nicht erreichbar. Bitte 'node server.js' starten.");
+      // Ein fetch-Fehler heißt nur "Verbindung kam nicht zustande" – die Ursache
+      // liegt oft schon vor dem Backend (z. B. Zertifikat des Dev-Servers).
+      setError("Verbindung fehlgeschlagen. Läuft der Dev-Server und ist das Zertifikat akzeptiert? Details in der Browser-Konsole (F12).");
     }
 
     setLoading(false);
@@ -77,7 +100,7 @@ export default function Login({ onLogin }) {
                   className="login-input"
                   type="email"
                   required
-                  placeholder="dörte@kanzlei.de"
+                  placeholder="emma.schmidt@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   style={{ width: "100%", padding: "10px 12px 10px 36px", border: "1.5px solid #e5e7eb", borderRadius: 8, fontSize: 14, color: "#111827", background: "#f9fafb", transition: "border-color .15s" }}

@@ -1,6 +1,19 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import FileIcon from './FileIcon';
 import StatusBadge from './StatusBadge';
+
+/* Leeres Datengerüst für Belege ohne KI-Extraktion (hochgeladene/gescannte
+   Dateien vom Server) – gleiche Ansicht, nur ohne eingetragene Zahlen. */
+const LEERE_DATEN = {
+  aussteller: "", adresse: "", ustIdNr: "", datum: "", rechnungsnr: "",
+  zahlungsart: "", positionen: [],
+  nettoBetrag: "", mwstSatz: "", mwstBetrag: "", gesamtBetrag: "",
+};
+
+const NEUE_POSITION = {
+  bezeichnung: "", menge: "", einzelpreis: "",
+  netto: "", mwstSatz: 19, mwstBetrag: "", betrag: "", angerechnet: true,
+};
 
 function ConfidenceRing({ value }) {
   const r = 36, circ = 2 * Math.PI * r;
@@ -28,6 +41,52 @@ function ConfidenceRing({ value }) {
           Plausibilitätsscore der extrahierten Belegdaten
         </p>
       </div>
+  );
+}
+
+/* ── Echte Dokumentvorschau (Backend-PDF oder Datei vom lokalen Server) ── */
+function ServerFilePreview({ doc, mandant }) {
+  const [fileUrl, setFileUrl] = useState(null);
+  const [error, setError]     = useState(false);
+
+  useEffect(() => {
+    let objectUrl = null;
+    const load = async () => {
+      try {
+        // fetch statt <img src>, weil beide Server den Auth-Header verlangen
+        const url = doc.backendDoc
+            ? `/backend/api/documents/${doc.apiId}/pdf`
+            : `/api/belege/file?mandantNr=${encodeURIComponent(mandant.nr)}&mandantName=${encodeURIComponent(mandant.name)}&name=${encodeURIComponent(doc.name)}`;
+        const token = doc.backendDoc
+            ? sessionStorage.getItem("bs_api_token")
+            : sessionStorage.getItem("bs_token");
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) throw new Error();
+        objectUrl = URL.createObjectURL(await res.blob());
+        setFileUrl(objectUrl);
+      } catch {
+        setError(true);
+      }
+    };
+    load();
+    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [doc.name, doc.apiId, doc.backendDoc, mandant.nr, mandant.name]);
+
+  if (error) {
+    return (
+        <div style={{ padding: 40, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
+          <i className="bi bi-file-earmark-x" style={{ fontSize: 34, display: "block", marginBottom: 8 }} />
+          Datei konnte nicht geladen werden.
+        </div>
+    );
+  }
+  if (!fileUrl) {
+    return <div style={{ padding: 40, textAlign: "center", color: "#9ca3af", fontSize: 13, animation: "pulse 1.2s infinite" }}>Lade Dokument…</div>;
+  }
+  return doc.type === "pdf" ? (
+      <iframe src={fileUrl} title={doc.name} style={{ width: "100%", height: "100%", minHeight: 500, border: "none", borderRadius: 4, background: "#fff", boxShadow: "0 2px 12px rgba(0,0,0,.08)" }} />
+  ) : (
+      <img src={fileUrl} alt={doc.name} style={{ width: "100%", borderRadius: 4, boxShadow: "0 2px 12px rgba(0,0,0,.08)" }} />
   );
 }
 
@@ -192,13 +251,13 @@ function berechneAnrechnung(positionen, included) {
   };
 }
 
-export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
+export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDiscard }) {
   const [editMode, setEditMode] = useState(false);
-  const [edited, setEdited] = useState({ ...doc.extractedData });
+  const [edited, setEdited] = useState({ ...LEERE_DATEN, ...doc.extractedData });
   const [included, setIncluded] = useState(
-      () => (doc.extractedData.positionen ?? []).map(p => p.angerechnet !== false)
+      () => (doc.extractedData?.positionen ?? []).map(p => p.angerechnet !== false)
   );
-  const ed = doc.extractedData;
+  const ed = doc.extractedData ?? LEERE_DATEN;
 
   const positionen = editMode ? edited.positionen : ed.positionen;
   const calc = berechneAnrechnung(positionen, included);
@@ -206,11 +265,34 @@ export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
 
   const toggleIncluded = (i) => setIncluded(prev => prev.map((v, ii) => ii === i ? !v : v));
 
+  const addPosition = () => {
+    setEdited(prev => ({ ...prev, positionen: [...(prev.positionen ?? []), { ...NEUE_POSITION }] }));
+    setIncluded(prev => [...prev, true]);
+  };
+
+  // Fehlende Zahlen einer Position ergänzen (bei manuell angelegten Zeilen):
+  // aus Netto + Satz folgen MwSt und Brutto, aus Brutto + Satz folgt Netto.
+  const ergaenzePosition = (p) => {
+    const satz = Number(p.mwstSatz) || 0;
+    let netto  = parseBetrag(p.netto);
+    let brutto = parseBetrag(p.betrag);
+    let mwst   = parseBetrag(p.mwstBetrag);
+    if (!netto && brutto) netto = brutto / (1 + satz / 100);
+    if (!mwst)            mwst  = netto * (satz / 100);
+    if (!brutto)          brutto = netto + mwst;
+    return {
+      ...p,
+      netto:      p.netto      || formatBetrag(netto),
+      mwstBetrag: p.mwstBetrag || formatBetrag(mwst),
+      betrag:     p.betrag     || formatBetrag(brutto),
+    };
+  };
+
   // Beim Speichern: Checkbox-Flags übernehmen und alle Summen aus den
   // (ggf. bearbeiteten) Positionen neu berechnen. gesamtBetrag = Beleg gesamt,
   // angerechnetBetrag = Brutto nur der angehakten Positionen.
   const withFlags = (data) => {
-    const pos = data.positionen ?? [];
+    const pos = (data.positionen ?? []).map(ergaenzePosition);
     const alle = berechneAnrechnung(pos, pos.map(() => true));
     const anrechenbar = berechneAnrechnung(pos, included);
     return {
@@ -261,7 +343,7 @@ export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
             {/* Left: Scan */}
             <div style={{ width: "42%", flexShrink: 0, background: "#f5f3ef", borderRight: "1px solid #ede9e0", overflowY: "auto", padding: 20 }}>
               <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", letterSpacing: ".08em", marginBottom: 12 }}>ORIGINALDOKUMENT</div>
-              <ScanPreview doc={doc} />
+              {(doc.backendDoc || (doc.serverFile && mandant)) ? <ServerFilePreview doc={doc} mandant={mandant} /> : <ScanPreview doc={doc} />}
             </div>
 
             {/* Right: Extracted data */}
@@ -270,12 +352,14 @@ export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
               {/* Confidence + header */}
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", letterSpacing: ".08em", marginBottom: 6 }}>KI-EXTRAHIERTE DATEN</div>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", letterSpacing: ".08em", marginBottom: 6 }}>{doc.confidence != null ? "KI-EXTRAHIERTE DATEN" : "BELEGDATEN"}</div>
                   <p style={{ fontSize: 12, color: "#6b7280", maxWidth: 320, lineHeight: 1.5 }}>
-                    Die folgenden Felder wurden automatisch aus dem Beleg extrahiert. Bitte prüfen und ggf. korrigieren.
+                    {doc.confidence != null
+                        ? "Die folgenden Felder wurden automatisch aus dem Beleg extrahiert. Bitte prüfen und ggf. korrigieren."
+                        : "Für diesen Beleg wurden keine Daten extrahiert. Über „Bearbeiten“ können die Felder manuell ausgefüllt werden."}
                   </p>
                 </div>
-                <ConfidenceRing value={doc.confidence} />
+                {doc.confidence != null && <ConfidenceRing value={doc.confidence} />}
               </div>
 
               {/* Fields grid */}
@@ -348,6 +432,17 @@ export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
                         </div>
                     );
                   })}
+                  {(positionen ?? []).length === 0 && !editMode && (
+                      <div style={{ padding: "18px 12px", textAlign: "center", fontSize: 12, color: "#9ca3af" }}>
+                        Keine Positionen erfasst — über „Bearbeiten“ hinzufügen.
+                      </div>
+                  )}
+                  {editMode && (
+                      <button onClick={addPosition}
+                              style={{ width: "100%", padding: "9px 12px", background: "transparent", border: "none", borderTop: (positionen ?? []).length > 0 ? "1px solid #f0ece4" : "none", fontSize: 12, fontWeight: 600, color: "#18537a", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                        <i className="bi bi-plus-circle" /> Position hinzufügen
+                      </button>
+                  )}
                 </div>
               </div>
 
@@ -402,7 +497,7 @@ export default function DocDetailModal({ doc, onClose, onConfirm, onDiscard }) {
 
                 {/* Abgleich mit dem Beleg */}
                 <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #e0dbd2", display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#9ca3af" }}>
-                  <span>Beleg gesamt: <strong style={{ color: "#6b7280" }}>{ed.gesamtBetrag}</strong></span>
+                  <span>Beleg gesamt: <strong style={{ color: "#6b7280" }}>{ed.gesamtBetrag || "—"}</strong></span>
                   {calc.ausgenommenBrutto > 0 && (
                       <span>davon ausgenommen: <strong style={{ color: "#b45309" }}>{formatBetrag(calc.ausgenommenBrutto)}</strong></span>
                   )}

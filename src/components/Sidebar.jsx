@@ -1,12 +1,11 @@
 import { useState } from "react";
 import MandantAvatar from "./MandantAvatar";
-import { MANDANTEN } from "../data/mockData";
 
-export default function Sidebar({ currentMandant, sidebarOpen, onSelectMandant, onClose, user, onLogout }) {
+export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSelectMandant, onClose, user, onLogout }) {
     const [search, setSearch] = useState("");
     const [dropdownOpen, setDropdownOpen] = useState(false);
 
-    const filtered = MANDANTEN.filter((m) =>
+    const filtered = (mandanten ?? []).filter((m) =>
         m.name.toLowerCase().includes(search.toLowerCase()) ||
         m.nr.toLowerCase().includes(search.toLowerCase())
     );
@@ -71,7 +70,7 @@ export default function Sidebar({ currentMandant, sidebarOpen, onSelectMandant, 
             <div style={{ height: 1, background: "rgba(255,255,255,.06)", margin: "0 12px 16px" }} />
 
             {/* Nav */}
-            <nav style={{ flex: 1, padding: "0 10px" }}>
+            <nav style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 10px" }}>
                 {[
                     { icon: "bi-border-all",      label: "Dashboard" },
                     { icon: "bi-folder",          label: "Belege",        active: true },
@@ -86,7 +85,7 @@ export default function Sidebar({ currentMandant, sidebarOpen, onSelectMandant, 
             </nav>
 
             {/* User */}
-            <div style={{ padding: "12px 20px", borderTop: "1px solid rgba(255,255,255,.06)", display: "flex", alignItems: "center", gap: 9 }}>
+            <div style={{ padding: "20px 40px", borderTop: "1px solid rgba(255,255,255,.06)", display: "flex", alignItems: "center", gap: 9 }}>
                 <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#18537a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fd8f19", flexShrink: 0 }}>
                     {(user?.name || "??").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
                 </div>

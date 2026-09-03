@@ -2,6 +2,7 @@ import 'bootstrap-icons/font/bootstrap-icons.css';
 import { useState, useRef, useCallback, useEffect } from "react";
 
 import { MANDANTEN, DOCS_BY_MANDANT } from "./data/mockData";
+import { apiFetch, userToMandant, documentToDoc, updatePayload } from "./api";
 import { useUpload } from "./hooks/useUpload";
 import MandantAvatar from "./components/MandantAvatar";
 import FileIcon from "./components/FileIcon";
@@ -11,9 +12,11 @@ import MobileTopbar from "./components/MobileTopbar";
 import BottomNav from "./components/BottomNav";
 import DocumentScanModal from "./components/DocumentScanModal";
 import DocDetailModal from "./components/DocDetailModal";
+import ScannerInbox from "./components/ScannerInbox";
 
 export default function App({ user, onLogout }) {
   const [allDocs, setAllDocs]         = useState({ ...DOCS_BY_MANDANT });
+  const [mandanten, setMandanten]     = useState(MANDANTEN);
   const [currentMandant, setCurrentMandant] = useState(MANDANTEN[0]);
   const [dragging, setDragging]       = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -22,6 +25,7 @@ export default function App({ user, onLogout }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile]       = useState(window.innerWidth <= 900);
   const [selectedDoc, setSelectedDoc] = useState(null);
+  const [scanInbox, setScanInbox]     = useState([]);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -37,6 +41,10 @@ export default function App({ user, onLogout }) {
 
   const handleLogout = async () => {
     try {
+      // Backend-Token widerrufen
+      await apiFetch("/logout", { method: "POST" });
+    } catch { /* Backend-Logout optional */ }
+    try {
       await fetch("/api/auth/logout", {
         method: "POST",
         headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
@@ -49,32 +57,125 @@ export default function App({ user, onLogout }) {
 
   const { uploading, uploadProgress, uploadToLocal } = useUpload(currentMandant, setAllDocs, showNotification);
 
-  // Belege vom Server laden
   useEffect(() => {
-    const load = async () => {
+    const testConnection = async () => {
       try {
-        const res = await fetch(`/api/belege?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}`, {
+        const data = await apiFetch("/test-connection", { token: null });
+        console.log("Backend-Verbindung:", data);
+      } catch (err) {
+        console.error("Fehler beim Abruf:", err.message);
+      }
+    };
+    testConnection();
+  }, []);
+
+  // Mandanten aus der Datenbank laden (Benutzer der Gruppe "client").
+  // Klappt das, fliegen die Mock-Daten raus; sonst bleibt der Demo-Modus.
+  useEffect(() => {
+    const ladeMandanten = async () => {
+      try {
+        const { data } = await apiFetch("/users");
+        const liste = (data || []).filter((u) => u.groups?.includes("client")).map(userToMandant);
+        if (!liste.length) return;
+        setMandanten(liste);
+        setCurrentMandant(liste[0]);
+        setAllDocs({});
+      } catch {
+        console.warn("Backend nicht erreichbar – Demo-Modus mit Mock-Daten.");
+      }
+    };
+    ladeMandanten();
+  }, []);
+
+  // Belege des Mandanten aus der Datenbank laden
+  const loadBackendDocs = useCallback(async (mandant) => {
+    try {
+      const { data } = await apiFetch("/documents");
+      const docs = (data || [])
+          .filter((d) => (d.client_user_id ?? d.user_id) === mandant.id)
+          .map(documentToDoc);
+      setAllDocs((prev) => {
+        const andere = (prev[mandant.id] || []).filter((d) => !d.backendDoc);
+        return { ...prev, [mandant.id]: [...docs, ...andere] };
+      });
+    } catch { /* Backend nicht erreichbar */ }
+  }, []);
+
+  // Belege vom Server laden
+  const loadServerDocs = useCallback(async (mandant) => {
+    try {
+      const res = await fetch(`/api/belege?mandantNr=${encodeURIComponent(mandant.nr)}&mandantName=${encodeURIComponent(mandant.name)}`, {
+        headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
+      });
+      if (!res.ok) return;
+      const { files } = await res.json();
+      if (!files?.length) return;
+      const serverDocs = files.map((f, i) => ({
+        id: `server_${mandant.id}_${i}_${f.name}`, name: f.name, size: f.size,
+        type: f.name.toLowerCase().endsWith(".pdf") ? "pdf" : "image",
+        uploadedAt: f.createdAt, status: "ausstehend", category: "Nicht klassifiziert", amount: "---",
+        serverFile: true,
+      }));
+      setAllDocs((prev) => {
+        const existing = prev[mandant.id] || [];
+        const names = new Set(existing.map((d) => d.name));
+        const newDocs = serverDocs.filter((d) => !names.has(d.name));
+        if (!newDocs.length) return prev;
+        return { ...prev, [mandant.id]: [...newDocs, ...existing] };
+      });
+    } catch {}
+  }, []);
+
+  // Abhängigkeit ist das Mandanten-Objekt selbst: nach dem Laden der echten
+  // Mandanten kann sich der Mandant ändern, ohne dass die id wechselt
+  // (Mock-Ids und Datenbank-Ids überschneiden sich)
+  useEffect(() => {
+    loadBackendDocs(currentMandant);
+    loadServerDocs(currentMandant);
+  }, [currentMandant]);
+
+  // Scanner-Eingang abfragen (alle 10 s) – automatisch zugeordnete Scans
+  // erscheinen dabei über loadServerDocs direkt in der Belegliste
+  useEffect(() => {
+    const fetchInbox = async () => {
+      try {
+        const res = await fetch("/api/scan/inbox", {
           headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
         });
         if (!res.ok) return;
         const { files } = await res.json();
-        if (!files?.length) return;
-        const serverDocs = files.map((f, i) => ({
-          id: `server_${currentMandant.id}_${i}_${f.name}`, name: f.name, size: f.size,
-          type: f.name.toLowerCase().endsWith(".pdf") ? "pdf" : "image",
-          uploadedAt: f.createdAt, status: "ausstehend", category: "Nicht klassifiziert", amount: "---",
-        }));
-        setAllDocs((prev) => {
-          const existing = prev[currentMandant.id] || [];
-          const names = new Set(existing.map((d) => d.name));
-          const newDocs = serverDocs.filter((d) => !names.has(d.name));
-          if (!newDocs.length) return prev;
-          return { ...prev, [currentMandant.id]: [...newDocs, ...existing] };
-        });
+        setScanInbox(files || []);
       } catch {}
     };
-    load();
-  }, [currentMandant.id]);
+    fetchInbox();
+    const timer = setInterval(() => {
+      fetchInbox();
+      loadServerDocs(currentMandant);
+      loadBackendDocs(currentMandant);
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [currentMandant]);
+
+  // Scan benennen und einem Mandanten zuweisen (newName optional)
+  const assignScan = async (fileName, mandantNr, newName = null) => {
+    const mandant = mandanten.find((m) => m.nr === mandantNr);
+    try {
+      const res = await fetch("/api/scan/assign", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sessionStorage.getItem("bs_token")}`,
+        },
+        body: JSON.stringify({ fileName, mandantNr, mandantName: mandant?.name, newName }),
+      });
+      if (!res.ok) throw new Error();
+      setScanInbox((prev) => prev.filter((f) => f.name !== fileName));
+      if (mandant) loadServerDocs(mandant);
+      showNotification(`Scan zugeordnet: ${mandant?.name ?? mandantNr} ✓`);
+    } catch {
+      showNotification("Zuordnung fehlgeschlagen.", "error");
+    }
+  };
 
   const selectMandant = (m) => {
     setCurrentMandant(m);
@@ -98,16 +199,54 @@ export default function App({ user, onLogout }) {
     }, 2800);
   };
 
-  const handleConfirm = (docId, editedData) => {
+  const handleConfirm = async (docId, editedData) => {
+    const doc = (allDocs[currentMandant.id] || []).find((d) => d.id === docId);
+
+    // Backend-Belege: bestätigte Daten in die Datenbank schreiben
+    if (doc?.backendDoc) {
+      try {
+        await apiFetch(`/documents/${doc.apiId}`, {
+          method: "PATCH",
+          body: updatePayload(editedData, doc.category),
+        });
+      } catch (e) {
+        showNotification(`Speichern im Backend fehlgeschlagen: ${e.message}`, "error");
+        return;
+      }
+    }
+
     setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map(d => d.id === docId ? { ...d, status: "analysiert", extractedData: editedData, amount: editedData.angerechnetBetrag ?? editedData.gesamtBetrag } : d) }));
     setSelectedDoc(null);
     showNotification("Beleg bestätigt und gespeichert ✓");
   };
 
-  const handleDiscard = (docId) => {
-    setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).filter(d => d.id !== docId) }));
+  const handleDiscard = async (doc) => {
+    // Backend-Belege in der Datenbank löschen (Soft-Delete)
+    if (doc.backendDoc) {
+      try {
+        await apiFetch(`/documents/${doc.apiId}`, { method: "DELETE" });
+      } catch (e) {
+        showNotification(`Löschen im Backend fehlgeschlagen: ${e.message}`, "error");
+        return;
+      }
+    }
+    // Dateien vom Server auch dort löschen – sonst tauchen sie beim
+    // nächsten Abgleich (Polling) wieder in der Liste auf
+    if (doc.serverFile) {
+      try {
+        const res = await fetch(`/api/belege/file?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}&name=${encodeURIComponent(doc.name)}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
+        });
+        if (!res.ok) throw new Error();
+      } catch {
+        showNotification("Löschen auf dem Server fehlgeschlagen.", "error");
+        return;
+      }
+    }
+    setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).filter(d => d.id !== doc.id) }));
     setSelectedDoc(null);
-    showNotification("Beleg verworfen", "error");
+    showNotification("Beleg gelöscht", "error");
   };
 
   const docs = allDocs[currentMandant.id] || [];
@@ -133,6 +272,12 @@ export default function App({ user, onLogout }) {
         @keyframes dropDown { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
+        /* Mobile Browser zählen die Adressleiste zu 100vh dazu – dadurch hing
+           der Logout-Button unten in der Sidebar unter dem sichtbaren Rand.
+           dvh = tatsächlich sichtbare Höhe; 100vh bleibt als Fallback. */
+        @supports (height: 100dvh) {
+          .sidebar { height: 100dvh !important; }
+        }
         .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 199; }
         .mobile-topbar   { display: none; }
         .bottom-nav      { display: none; }
@@ -153,7 +298,7 @@ export default function App({ user, onLogout }) {
 
         {/* Modals */}
         {cameraOpen && <DocumentScanModal onClose={() => setCameraOpen(false)} onCapture={(file) => uploadToLocal([file])} />}
-        {selectedDoc && <DocDetailModal doc={selectedDoc} onClose={() => setSelectedDoc(null)} onConfirm={(ed) => handleConfirm(selectedDoc.id, ed)} onDiscard={() => handleDiscard(selectedDoc.id)} />}
+        {selectedDoc && <DocDetailModal doc={selectedDoc} mandant={currentMandant} onClose={() => setSelectedDoc(null)} onConfirm={(ed) => handleConfirm(selectedDoc.id, ed)} onDiscard={() => handleDiscard(selectedDoc)} />}
 
         {/* Sidebar overlay */}
         {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
@@ -162,7 +307,7 @@ export default function App({ user, onLogout }) {
         <MobileTopbar onMenuClick={() => setSidebarOpen((v) => !v)} onCameraClick={() => setCameraOpen(true)} />
 
         {/* Sidebar */}
-        <Sidebar currentMandant={currentMandant} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} />
+        <Sidebar currentMandant={currentMandant} mandanten={mandanten} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} />
 
         {/* Main */}
         <main className="main-content" style={{ marginLeft: 240, flex: 1, minWidth: 0, padding: isMobile ? "90px 16px 84px" : "30px 32px", animation: "fadeUp .4s ease", display: "flex", justifyContent: "center", background: "#f8f7f4" }}>
@@ -190,6 +335,9 @@ export default function App({ user, onLogout }) {
                   </div>
               ))}
             </div>
+
+            {/* Scanner-Eingang: unzugeordnete Scans manuell zuweisen */}
+            <ScannerInbox files={scanInbox} mandanten={mandanten} onAssign={assignScan} />
 
             {/* Upload Zone */}
             <div onDrop={onDrop} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
@@ -242,8 +390,8 @@ export default function App({ user, onLogout }) {
                 const conf = doc.confidence;
                 const confColor = !conf ? "#d1d5db" : conf >= 85 ? "#16a34a" : conf >= 65 ? "#d97706" : "#dc2626";
                 return (
-                    <div key={doc.id} onClick={() => doc.extractedData && setSelectedDoc(doc)}
-                         style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 60px", padding: "12px 20px", borderBottom: i < filteredDocs.length - 1 ? "1px solid #f9f7f3" : "none", alignItems: "center", cursor: doc.extractedData ? "pointer" : "default", transition: "background .12s" }}
+                    <div key={doc.id} onClick={() => setSelectedDoc(doc)}
+                         style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 60px", padding: "12px 20px", borderBottom: i < filteredDocs.length - 1 ? "1px solid #f9f7f3" : "none", alignItems: "center", cursor: "pointer", transition: "background .12s" }}
                          onMouseEnter={e => (e.currentTarget.style.background = "#fafaf8")}
                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
