@@ -1,7 +1,7 @@
 import { useState } from "react";
 import MandantAvatar from "./MandantAvatar";
 
-export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSelectMandant, onClose, user, onLogout }) {
+export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSelectMandant, onClose, user, onLogout, view, onNavigate, zeigeMandantenwechsel = true }) {
     const [search, setSearch] = useState("");
     const [dropdownOpen, setDropdownOpen] = useState(false);
 
@@ -27,7 +27,8 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
                 <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 17, fontWeight: 400, color: "transparent", WebkitTextStroke: "1.2px #fd8f19" }}>Squid</span>
             </div>
 
-            {/* Mandant Switcher */}
+            {/* Mandant Switcher – nur für Kanzlei-Rollen, Mandanten sehen nur sich selbst */}
+            {zeigeMandantenwechsel && (
             <div style={{ padding: "0 12px 16px", position: "relative" }}>
                 <div style={{ fontSize: 9, fontWeight: 600, color: "#2b5f7a", letterSpacing: ".1em", marginBottom: 7, paddingLeft: 4 }}>MANDANT</div>
                 <button onClick={() => setDropdownOpen((v) => !v)}
@@ -66,22 +67,27 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
                     </div>
                 )}
             </div>
+            )}
 
             <div style={{ height: 1, background: "rgba(255,255,255,.06)", margin: "0 12px 16px" }} />
 
             {/* Nav */}
             <nav style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 10px" }}>
                 {[
-                    { icon: "bi-border-all",      label: "Dashboard" },
-                    { icon: "bi-folder",          label: "Belege",        active: true },
+                    { icon: "bi-border-all",      label: "Startseite",    view: "dashboard" },
+                    { icon: "bi-folder",          label: "Belege",        view: "belege" },
                     { icon: "bi-bar-chart-line",  label: "Auswertungen" },
                     { icon: "bi-gear",            label: "Einstellungen" },
-                ].map((item) => (
-                    <div key={item.label} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", borderRadius: 7, background: item.active ? "rgba(201,168,76,.12)" : "transparent", color: item.active ? "#fd8f19" : "#7ab8d0", fontSize: 13, fontWeight: item.active ? 600 : 400, cursor: "pointer", marginBottom: 2, borderLeft: item.active ? "2px solid #fd8f19" : "2px solid transparent" }}>
+                ].map((item) => {
+                    const active = item.view != null && item.view === view;
+                    const wechsle = () => { if (!item.view) return; onNavigate?.(item.view); onClose(); };
+                    return (
+                    <div key={item.label} onClick={wechsle} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", borderRadius: 7, background: active ? "rgba(201,168,76,.12)" : "transparent", color: active ? "#fd8f19" : "#7ab8d0", fontSize: 13, fontWeight: active ? 600 : 400, cursor: "pointer", marginBottom: 2, borderLeft: active ? "2px solid #fd8f19" : "2px solid transparent" }}>
                         <i className={`bi ${item.icon}`} style={{ fontSize: 15 }} />
                         {item.label}
                     </div>
-                ))}
+                    );
+                })}
             </nav>
 
             {/* User */}
