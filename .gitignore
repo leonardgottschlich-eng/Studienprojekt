@@ -26,3 +26,6 @@ dist-ssr
 # Lokale Dev-Zertifikate (private Schluessel nie committen)
 certs/*
 !certs/README.md
+
+# Lokale Claude-Code-Konfiguration
+.claude/

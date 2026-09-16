@@ -20,8 +20,26 @@ import ScannerInbox from "./components/ScannerInbox";
 import BelegSuche from "./components/BelegSuche";
 import SettingsPage from "./components/SettingsPage";
 import KategorieChips from "./components/KategorieChips";
+import DashboardBerater from "./components/DashboardBerater";
+import DashboardMandant from "./components/DashboardMandant";
+import StatTile from "./components/StatTile";
+
+/**
+ * Rolle des angemeldeten Benutzers. Das Backend liefert die Gruppen
+ * admin / tax_advisor / client ("user" ist die alte Mandanten-Gruppe).
+ * Ohne Gruppen (Demo-Modus mit Mock-Daten) gilt die Kanzlei-Ansicht.
+ */
+const istMandantenRolle = (user) => {
+  const gruppen = user?.groups ?? [];
+  if (gruppen.includes("admin") || gruppen.includes("tax_advisor")) return false;
+  return gruppen.includes("client") || gruppen.includes("user");
+};
 
 export default function App({ user, onLogout }) {
+  const istMandant = istMandantenRolle(user);
+
+  const [view, setView]               = useState("dashboard");
+  const [zuordnungUnbekannt, setZuordnungUnbekannt] = useState(false);
   const [allDocs, setAllDocs]         = useState({ ...DOCS_BY_MANDANT });
   const [mandanten, setMandanten]     = useState(MANDANTEN);
   const [currentMandant, setCurrentMandant] = useState(MANDANTEN[0]);
@@ -66,7 +84,10 @@ export default function App({ user, onLogout }) {
       await apiFetch("/logout", { method: "POST" });
     } catch { /* Backend-Logout optional */ }
     try {
-      await lokalFetch("/api/auth/logout", { method: "POST" });
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
+      });
     } catch {
       // Server-Logout optional – Frontend meldet trotzdem ab
     }
@@ -89,37 +110,81 @@ export default function App({ user, onLogout }) {
 
   // Mandanten aus der Datenbank laden (Benutzer der Gruppe "client").
   // Klappt das, fliegen die Mock-Daten raus; sonst bleibt der Demo-Modus.
-  useEffect(() => {
-    const ladeMandanten = async () => {
-      try {
-        const { data } = await apiFetch("/users");
-        const liste = (data || []).filter((u) => u.groups?.includes("client")).map(userToMandant);
-        if (!liste.length) return;
+  //
+  // Welche Mandanten sichtbar sind, hängt von der Rolle ab:
+  //   client       – nur man selbst
+  //   tax_advisor  – die zugewiesenen (Tabelle advisor_clients)
+  //   admin        – alle
+  const ladeMandanten = useCallback(async () => {
+    try {
+      const { data } = await apiFetch("/users");
+      const alleClients = (data || [])
+          .filter((u) => u.groups?.includes("client") || u.groups?.includes("user"))
+          .map(userToMandant);
+
+      // Mandant: nur der eigene Datensatz. Steht er nicht in /users
+      // (eingeschränkte Sicht), wird er aus dem Login-Benutzer gebaut.
+      if (istMandant) {
+        const eigener = alleClients.filter((m) => m.id === user.id);
+        const liste = eigener.length ? eigener : [userToMandant(user, 0)];
         setMandanten(liste);
         // Auf Wunsch beim zuletzt gewählten Mandanten weitermachen
         const gemerkt = einstellungen.mandantMerken ? ladeLetztenMandanten() : null;
         setCurrentMandant(liste.find((m) => m.id === gemerkt) ?? liste[0]);
         setAllDocs({});
-      } catch {
-        console.warn("Backend nicht erreichbar – Demo-Modus mit Mock-Daten.");
+        return;
       }
-    };
-    ladeMandanten();
-  }, []);
 
-  // Belege des Mandanten aus der Datenbank laden
-  const loadBackendDocs = useCallback(async (mandant) => {
+      if (!alleClients.length) return;
+
+      // Steuerberater:in – auf die aktiv zugewiesenen Mandanten einschränken.
+      // Gibt es keine Zuordnung (oder liefert der Endpunkt nichts), bleiben
+      // alle Mandanten sichtbar; das Dashboard weist darauf hin.
+      let liste = alleClients;
+      if (user?.groups?.includes("tax_advisor")) {
+        let zugewiesen = null;
+        try {
+          const { data: links } = await apiFetch("/advisor-clients");
+          zugewiesen = new Set(
+              (links || [])
+                  .filter((l) => l.status === "active" && l.advisor_user_id === user.id)
+                  .map((l) => l.client_user_id)
+          );
+        } catch {
+          console.warn("advisor-clients nicht abrufbar – es werden alle Mandanten angezeigt.");
+        }
+        if (zugewiesen?.size) liste = alleClients.filter((m) => zugewiesen.has(m.id));
+        else setZuordnungUnbekannt(true);
+      }
+
+      setMandanten(liste);
+      setCurrentMandant(liste[0]);
+      setAllDocs({});
+    } catch {
+      console.warn("Backend nicht erreichbar – Demo-Modus mit Mock-Daten.");
+    }
+  }, [istMandant, user]);
+
+  // Belege aus der Datenbank laden – alle sichtbaren auf einmal und nach
+  // Mandant gruppiert. Die Kanzlei-Startseite braucht die Zahlen aller
+  // Mandanten, nicht nur die des gerade ausgewählten.
+  const loadBackendDocs = useCallback(async () => {
     try {
       const { data } = await apiFetch("/documents");
-      const docs = (data || [])
-          .filter((d) => (d.client_user_id ?? d.user_id) === mandant.id)
-          .map(documentToDoc);
+      const gruppiert = {};
+      (data || []).forEach((d) => {
+        const mandantId = d.client_user_id ?? d.user_id;
+        (gruppiert[mandantId] ||= []).push(documentToDoc(d));
+      });
       setAllDocs((prev) => {
-        // Zugeordnete Scans liegen zusätzlich lokal im Mandantenordner – der
-        // Beleg aus der Datenbank gewinnt, damit er nicht doppelt erscheint
-        const namen = new Set(docs.map((d) => d.name));
-        const andere = (prev[mandant.id] || []).filter((d) => !d.backendDoc && !namen.has(d.name));
-        return { ...prev, [mandant.id]: [...docs, ...andere] };
+        const next = { ...prev };
+        // Lokal hochgeladene Bilder und Scanner-Dateien bleiben erhalten,
+        // sie stehen nicht in der Datenbank.
+        for (const id of new Set([...Object.keys(prev), ...Object.keys(gruppiert)])) {
+          const andere = (prev[id] || []).filter((d) => !d.backendDoc);
+          next[id] = [...(gruppiert[id] || []), ...andere];
+        }
+        return next;
       });
     } catch { /* Backend nicht erreichbar */ }
   }, []);
@@ -147,6 +212,15 @@ export default function App({ user, onLogout }) {
     } catch {}
   }, []);
 
+  // Erst die Mandanten (leert die Demo-Daten), danach die Belege – sonst
+  // würde das Leeren die schon geladenen Belege wieder verwerfen.
+  useEffect(() => {
+    (async () => {
+      await ladeMandanten();
+      loadBackendDocs();
+    })();
+  }, [ladeMandanten, loadBackendDocs]);
+
   // Abhängigkeit ist das Mandanten-Objekt selbst: nach dem Laden der echten
   // Mandanten kann sich der Mandant ändern, ohne dass die id wechselt
   // (Mock-Ids und Datenbank-Ids überschneiden sich)
@@ -155,12 +229,16 @@ export default function App({ user, onLogout }) {
     loadServerDocs(currentMandant);
   }, [currentMandant]);
 
-  // Scanner-Eingang abfragen – Takt und An/Aus kommen aus den Einstellungen.
-  // Zugeordnete Scans erscheinen dabei über loadServerDocs in der Belegliste.
+  // Scanner-Eingang abfragen (alle 10 s) – automatisch zugeordnete Scans
+  // erscheinen dabei über loadServerDocs direkt in der Belegliste.
+  // Der Scanner gehört zur Kanzlei, Mandanten fragen ihn nicht ab.
   useEffect(() => {
+    if (istMandant) return;
     const fetchInbox = async () => {
       try {
-        const res = await lokalFetch("/api/scan/inbox");
+        const res = await fetch("/api/scan/inbox", {
+          headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
+        });
         if (!res.ok) return;
         const { files } = await res.json();
         setScanInbox(files || []);
@@ -172,9 +250,9 @@ export default function App({ user, onLogout }) {
       fetchInbox();
       loadServerDocs(currentMandant);
       loadBackendDocs(currentMandant);
-    }, Math.max(5, einstellungen.intervallSekunden) * 1000);
+    }, 10000);
     return () => clearInterval(timer);
-  }, [currentMandant, einstellungen.autoAktualisieren, einstellungen.intervallSekunden]);
+  }, [currentMandant, istMandant,einstellungen.autoAktualisieren, einstellungen.intervallSekunden]);
 
   /**
    * Scan benennen, einem Mandanten zuordnen und als Beleg ins Backend übernehmen.
@@ -231,6 +309,13 @@ export default function App({ user, onLogout }) {
     showNotification(`Mandant gewechselt: ${m.name}`);
   };
 
+  // Klick auf einen Mandanten in der Kanzlei-Startseite: wechseln und
+  // gleich dessen Belege öffnen.
+  const oeffneMandantenbelege = (m) => {
+    selectMandant(m);
+    setView("belege");
+  };
+
   const onDrop = useCallback((e) => {
     e.preventDefault();
     setDragging(false);
@@ -285,6 +370,7 @@ export default function App({ user, onLogout }) {
       try {
         const res = await lokalFetch(`/api/belege/file?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}&name=${encodeURIComponent(doc.name)}`, {
           method: "DELETE",
+          headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
         });
         if (!res.ok) throw new Error();
       } catch {
@@ -352,7 +438,7 @@ export default function App({ user, onLogout }) {
         <MobileTopbar onMenuClick={() => setSidebarOpen((v) => !v)} onCameraClick={() => setCameraOpen(true)} />
 
         {/* Sidebar */}
-        <Sidebar currentMandant={currentMandant} mandanten={mandanten} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} activePage={page} onNavigate={navigiere} />
+        <Sidebar currentMandant={currentMandant} mandanten={mandanten} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} activePage={page} onNavigate={navigiere} view={view} onNavigate={setView} zeigeMandantenwechsel={!istMandant} />
 
         {/* Main */}
         <main className="main-content" style={{ marginLeft: 240, flex: 1, minWidth: 0, padding: isMobile ? "90px 16px 84px" : "30px 32px", animation: "fadeUp .4s ease", display: "flex", justifyContent: "center", background: "#f8f7f4" }}>
@@ -362,33 +448,56 @@ export default function App({ user, onLogout }) {
           ) : (
           <div style={{ width: "100%", maxWidth: 900 }}>
 
+            {/* Dateiauswahl – wird von der Startseite und der Belegliste genutzt */}
+            <input ref={fileInputRef} type="file" multiple accept=".pdf,image/*" style={{ display: "none" }} onChange={(e) => uploadToLocal(e.target.files)} />
+
+            {view === "dashboard" ? (
+              istMandant ? (
+                <DashboardMandant
+                    user={user}
+                    mandant={currentMandant}
+                    docs={docs}
+                    isMobile={isMobile}
+                    onOpenDoc={setSelectedDoc}
+                    onZurBelegliste={() => setView("belege")}
+                    onUpload={() => fileInputRef.current?.click()}
+                    onScan={() => setCameraOpen(true)}
+                />
+              ) : (
+                <DashboardBerater
+                    user={user}
+                    mandanten={mandanten}
+                    allDocs={allDocs}
+                    scanInboxCount={scanInbox.length}
+                    zuordnungUnbekannt={zuordnungUnbekannt}
+                    isMobile={isMobile}
+                    onSelectMandant={oeffneMandantenbelege}
+                    onScannerEingang={() => setView("belege")}
+                />
+              )
+            ) : (<>
+
             {/* Header */}
             <div style={{ marginBottom: 24 }}>
               {!isMobile && <h1 style={{ fontFamily: "'DM Serif Display',serif", fontSize: 26, color: "#0b2e44", fontWeight: 400, marginBottom: 3 }}>Belegverwaltung</h1>}
-              <p style={{ color: "#6b7280", fontSize: 13 }}>Belege für <span style={{ fontWeight: 600, color: "#18537a" }}>{currentMandant.name}</span></p>
+              <p style={{ color: "#6b7280", fontSize: 13 }}>
+                {istMandant ? "Ihre Belege" : <>Belege für <span style={{ fontWeight: 600, color: "#18537a" }}>{currentMandant.name}</span></>}
+              </p>
             </div>
 
             {/* Stats */}
             <div className="stats-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 22 }}>
-              {[
-                { label: "Belege gesamt", value: stats.total,      icon: "bi-file-text",      accent: "#18537a" },
-                { label: "Analysiert",    value: stats.analysiert, icon: "bi-check2",          accent: "#16a34a" },
-                { label: "Ausstehend",    value: stats.ausstehend, icon: "bi-hourglass-split", accent: "#d97706" },
-              ].map((s) => (
-                  <div key={s.label} style={{ background: "#fff", borderRadius: 10, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px solid #e8e4dc" }}>
-                    <div>
-                      <div style={{ fontSize: 11, color: "#9ca3af", fontWeight: 500, marginBottom: 3 }}>{s.label}</div>
-                      <div style={{ fontSize: 26, fontWeight: 700, color: s.accent }}>{s.value}</div>
-                    </div>
-                    <i className={`bi ${s.icon}`} style={{ fontSize: 26, opacity: 0.5, color: s.accent }} />
-                  </div>
-              ))}
+              <StatTile label="Belege gesamt" value={stats.total}      icon="bi-file-text"      accent="#18537a" />
+              <StatTile label="Analysiert"    value={stats.analysiert} icon="bi-check2"         accent="#16a34a" />
+              <StatTile label="Ausstehend"    value={stats.ausstehend} icon="bi-hourglass-split" accent="#d97706" />
             </div>
 
             {/* Scanner-Eingang: unzugeordnete Scans manuell zuweisen */}
             {einstellungen.scannerEingangAnzeigen && (
                 <ScannerInbox files={scanInbox} mandanten={mandanten} onAssign={assignScan} />
             )}
+            {/* Scanner-Eingang: unzugeordnete Scans manuell zuweisen (nur Kanzlei) */}
+            {!istMandant && <ScannerInbox files={scanInbox} mandanten={mandanten} onAssign={assignScan} />}
 
             {/* Upload Zone */}
             <div onDrop={onDrop} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
@@ -409,7 +518,6 @@ export default function App({ user, onLogout }) {
                   </>
               )}
             </div>
-            <input ref={fileInputRef} type="file" multiple accept=".pdf,image/*" style={{ display: "none" }} onChange={(e) => uploadToLocal(e.target.files)} />
 
             {/* KI Banner */}
             <div style={{ background: "linear-gradient(135deg,#0b2e44 0%,#18537a 100%)", borderRadius: 10, padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, border: "1px solid rgba(201,168,76,.2)" }}>
@@ -477,12 +585,14 @@ export default function App({ user, onLogout }) {
                 );
               })}
             </div>
+            </>)}
           </div>
           )}
         </main>
 
         {/* Bottom Nav */}
         <BottomNav activePage={page} onNavigate={navigiere} />
+        <BottomNav view={view} onNavigate={setView} />
 
         {/* Toast */}
         {notification && (

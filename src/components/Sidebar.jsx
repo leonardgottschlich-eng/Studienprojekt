@@ -1,7 +1,7 @@
 import { useState } from "react";
 import MandantAvatar from "./MandantAvatar";
 
-export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSelectMandant, onClose, user, onLogout, activePage = "belege", onNavigate }) {
+export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSelectMandant, onClose, user, onLogout, activePage = "belege", view, onNavigate, zeigeMandantenwechsel = true }) {
     const [search, setSearch] = useState("");
     const [dropdownOpen, setDropdownOpen] = useState(false);
 
@@ -27,7 +27,8 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
                 <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 17, fontWeight: 400, color: "transparent", WebkitTextStroke: "1.2px #fd8f19" }}>Squid</span>
             </div>
 
-            {/* Mandant Switcher */}
+            {/* Mandant Switcher – nur für Kanzlei-Rollen, Mandanten sehen nur sich selbst */}
+            {zeigeMandantenwechsel && (
             <div style={{ padding: "0 12px 16px", position: "relative" }}>
                 <div style={{ fontSize: 9, fontWeight: 600, color: "#2b5f7a", letterSpacing: ".1em", marginBottom: 7, paddingLeft: 4 }}>MANDANT</div>
                 <button onClick={() => setDropdownOpen((v) => !v)}
@@ -66,6 +67,7 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
                     </div>
                 )}
             </div>
+            )}
 
             <div style={{ height: 1, background: "rgba(255,255,255,.06)", margin: "0 12px 16px" }} />
 
