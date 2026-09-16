@@ -1,7 +1,7 @@
 import { useState } from "react";
 import MandantAvatar from "./MandantAvatar";
 
-export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSelectMandant, onClose, user, onLogout, activePage = "belege", view, onNavigate, zeigeMandantenwechsel = true }) {
+export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSelectMandant, onClose, user, onLogout, activePage = "belege", onNavigate, zeigeMandantenwechsel = true }) {
     const [search, setSearch] = useState("");
     const [dropdownOpen, setDropdownOpen] = useState(false);
 

@@ -64,14 +64,20 @@ export default function App({ user, onLogout }) {
   // Einstellungen bei jeder Änderung sichern
   useEffect(() => { speichereEinstellungen(einstellungen); }, [einstellungen]);
 
+  // "Einstellungen" ist eine eigene Seite; "Dashboard" und "Belege" sind die
+  // beiden Ansichten der Belegseite.
   const navigiere = (seite) => {
-    if (seite === "dashboard") {
-      showNotification("Das Dashboard ist noch nicht verfügbar.", "error");
-      return;
+    if (seite === "einstellungen") {
+      setPage("einstellungen");
+    } else {
+      setPage("belege");
+      setView(seite);
     }
-    setPage(seite);
     setSidebarOpen(false);
   };
+
+  // Für die Markierung in Sidebar und Bottom-Nav
+  const aktiveSeite = page === "einstellungen" ? "einstellungen" : view;
 
   const showNotification = (msg, type = "success") => {
     setNotification({ msg, type });
@@ -181,7 +187,10 @@ export default function App({ user, onLogout }) {
         // Lokal hochgeladene Bilder und Scanner-Dateien bleiben erhalten,
         // sie stehen nicht in der Datenbank.
         for (const id of new Set([...Object.keys(prev), ...Object.keys(gruppiert)])) {
-          const andere = (prev[id] || []).filter((d) => !d.backendDoc);
+          // Zugeordnete Scans liegen zusätzlich im lokalen Mandantenordner –
+          // bei gleichem Dateinamen gewinnt der Beleg aus der Datenbank
+          const namen = new Set((gruppiert[id] || []).map((d) => d.name));
+          const andere = (prev[id] || []).filter((d) => !d.backendDoc && !namen.has(d.name));
           next[id] = [...(gruppiert[id] || []), ...andere];
         }
         return next;
@@ -438,7 +447,7 @@ export default function App({ user, onLogout }) {
         <MobileTopbar onMenuClick={() => setSidebarOpen((v) => !v)} onCameraClick={() => setCameraOpen(true)} />
 
         {/* Sidebar */}
-        <Sidebar currentMandant={currentMandant} mandanten={mandanten} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} activePage={page} onNavigate={navigiere} view={view} onNavigate={setView} zeigeMandantenwechsel={!istMandant} />
+        <Sidebar currentMandant={currentMandant} mandanten={mandanten} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} activePage={aktiveSeite} onNavigate={navigiere} zeigeMandantenwechsel={!istMandant} />
 
         {/* Main */}
         <main className="main-content" style={{ marginLeft: 240, flex: 1, minWidth: 0, padding: isMobile ? "90px 16px 84px" : "30px 32px", animation: "fadeUp .4s ease", display: "flex", justifyContent: "center", background: "#f8f7f4" }}>
@@ -492,12 +501,11 @@ export default function App({ user, onLogout }) {
               <StatTile label="Ausstehend"    value={stats.ausstehend} icon="bi-hourglass-split" accent="#d97706" />
             </div>
 
-            {/* Scanner-Eingang: unzugeordnete Scans manuell zuweisen */}
-            {einstellungen.scannerEingangAnzeigen && (
+            {/* Scanner-Eingang: unzugeordnete Scans benennen und zuordnen.
+                Nur für Kanzlei-Rollen und nur, wenn in den Einstellungen gewünscht. */}
+            {!istMandant && einstellungen.scannerEingangAnzeigen && (
                 <ScannerInbox files={scanInbox} mandanten={mandanten} onAssign={assignScan} />
             )}
-            {/* Scanner-Eingang: unzugeordnete Scans manuell zuweisen (nur Kanzlei) */}
-            {!istMandant && <ScannerInbox files={scanInbox} mandanten={mandanten} onAssign={assignScan} />}
 
             {/* Upload Zone */}
             <div onDrop={onDrop} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
@@ -591,7 +599,7 @@ export default function App({ user, onLogout }) {
         </main>
 
         {/* Bottom Nav */}
-        <BottomNav activePage={page} onNavigate={navigiere} />
+        <BottomNav activePage={aktiveSeite} onNavigate={navigiere} />
         <BottomNav view={view} onNavigate={setView} />
 
         {/* Toast */}
