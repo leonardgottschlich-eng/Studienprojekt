@@ -6,7 +6,7 @@ import { apiFetch, userToMandant, documentToDoc, updatePayload, dateiZuDataUrl, 
 import { filterBelege, trefferFeld, vorhandeneKategorien, LEERER_FILTER } from "./utils/belegFilter";
 import { kategorienVon, bereinigeKategorien } from "./data/kategorien";
 import { lokalFetch } from "./localServer";
-import { ladeEinstellungen, speichereEinstellungen, ladeLetztenMandanten, merkeMandanten } from "./settings";
+import { ladeEinstellungen, speichereEinstellungen, ladeLetztenMandanten, merkeMandanten, ladeLetzteSeite, merkeSeite } from "./settings";
 import { useUpload } from "./hooks/useUpload";
 import MandantAvatar from "./components/MandantAvatar";
 import FileIcon from "./components/FileIcon";
@@ -35,17 +35,26 @@ const istMandantenRolle = (user) => {
   return gruppen.includes("client") || gruppen.includes("user");
 };
 
+// Kurzmeldungen unten rechts: Erfolg, Fehler und neutraler Hinweis
+const TOAST_STIL = {
+  success: { icon: "bi-check2",                    stil: { background: "#f0fdf4", border: "1px solid #86efac", color: "#16a34a" } },
+  error:   { icon: "bi-exclamation-triangle-fill", stil: { background: "#fef2f2", border: "1px solid #fca5a5", color: "#dc2626" } },
+  info:    { icon: "bi-info-circle-fill",          stil: { background: "#eef4f8", border: "1px solid #a8c9dd", color: "#18537a" } },
+};
+
 export default function App({ user, onLogout }) {
   const istMandant = istMandantenRolle(user);
 
-  const [view, setView]               = useState("dashboard");
+  // Beim Neuladen auf derselben Seite bleiben
+  const gemerkteSeite = ladeLetzteSeite();
+  const [view, setView]               = useState(gemerkteSeite === "belege" ? "belege" : "dashboard");
   const [zuordnungUnbekannt, setZuordnungUnbekannt] = useState(false);
   const [allDocs, setAllDocs]         = useState({ ...DOCS_BY_MANDANT });
   const [mandanten, setMandanten]     = useState(MANDANTEN);
   const [currentMandant, setCurrentMandant] = useState(MANDANTEN[0]);
   const [dragging, setDragging]       = useState(false);
   const [filter, setFilter]           = useState({ ...LEERER_FILTER });
-  const [page, setPage]               = useState("belege");
+  const [page, setPage]               = useState(gemerkteSeite === "einstellungen" ? "einstellungen" : "belege");
   const [einstellungen, setEinstellungen] = useState(ladeEinstellungen);
   const [notification, setNotification] = useState(null);
   const [cameraOpen, setCameraOpen]   = useState(false);
@@ -78,6 +87,9 @@ export default function App({ user, onLogout }) {
 
   // Für die Markierung in Sidebar und Bottom-Nav
   const aktiveSeite = page === "einstellungen" ? "einstellungen" : view;
+
+  // Aktuelle Seite merken, damit ein Neuladen hier bleibt
+  useEffect(() => { merkeSeite(aktiveSeite); }, [aktiveSeite]);
 
   const showNotification = (msg, type = "success") => {
     setNotification({ msg, type });
@@ -166,6 +178,14 @@ export default function App({ user, onLogout }) {
       setMandanten(liste);
       setCurrentMandant(liste[0]);
       setAllDocs({});
+
+      // In Google Drive die Ablage vorbereiten: _Unzugeordnet und je Mandant
+      // einen Ordner. Ohne freigegebenen Drive-Ordner passiert hier nichts.
+      lokalFetch("/api/drive/ordner", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mandanten: liste.map((m) => ({ nr: m.nr, name: m.name })) }),
+      }).catch(() => { /* Drive optional */ });
     } catch {
       console.warn("Backend nicht erreichbar – Demo-Modus mit Mock-Daten.");
     }
@@ -243,23 +263,35 @@ export default function App({ user, onLogout }) {
   // Der Scanner gehört zur Kanzlei, Mandanten fragen ihn nicht ab.
   useEffect(() => {
     if (istMandant) return;
-    const fetchInbox = async () => {
+
+    // Zwei Quellen: der lokale Scan-Ordner und der freigegebene Google-Drive-Ordner
+    const holeListe = async (pfad) => {
       try {
-        const res = await fetch("/api/scan/inbox", {
-          headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
-        });
-        if (!res.ok) return;
+        const res = await lokalFetch(pfad);
+        if (!res.ok) return [];
         const { files } = await res.json();
-        setScanInbox(files || []);
-      } catch {}
+        return files || [];
+      } catch { return []; }
     };
+
+    const fetchInbox = async () => {
+      const [lokal, drive] = await Promise.all([
+        holeListe("/api/scan/inbox"),
+        holeListe("/api/drive/inbox"),
+      ]);
+      setScanInbox([
+        ...lokal.map((f) => ({ ...f, quelle: "lokal" })),
+        ...drive,
+      ]);
+    };
+
     fetchInbox();
     if (!einstellungen.autoAktualisieren) return;
     const timer = setInterval(() => {
       fetchInbox();
       loadServerDocs(currentMandant);
       loadBackendDocs(currentMandant);
-    }, 10000);
+    }, Math.max(5, einstellungen.intervallSekunden) * 1000);
     return () => clearInterval(timer);
   }, [currentMandant, istMandant,einstellungen.autoAktualisieren, einstellungen.intervallSekunden]);
 
@@ -268,44 +300,59 @@ export default function App({ user, onLogout }) {
    * Das Original wandert zusätzlich in den Mandantenordner des Scan-Servers und
    * bleibt dort als lokales Archiv liegen.
    */
-  const assignScan = async (fileName, mandantNr, newName = null) => {
+  const assignScan = async (datei, mandantNr, newName = null) => {
     const mandant = mandanten.find((m) => m.nr === mandantNr);
     if (!mandant) { showNotification("Unbekannter Mandant.", "error"); return; }
 
+    const { name: fileName, quelle } = datei;
+    const ausDrive = quelle === "drive";
     const endung   = fileName.slice(fileName.lastIndexOf("."));
     const zielName = newName ? `${newName}${endung}` : fileName;
     const istPdf   = /\.pdf$/i.test(fileName);
+
+    // Je nach Quelle wird die Datei anders gelesen und anders einsortiert
+    const lesePfad = ausDrive
+        ? `/api/drive/file?id=${encodeURIComponent(datei.id)}`
+        : `/api/scan/file?name=${encodeURIComponent(fileName)}`;
 
     try {
       // 1. Beleg in der Datenbank anlegen – zuerst, damit bei einem Fehler
       //    noch nichts verschoben wurde. Bilder kann das Backend nicht annehmen.
       if (istPdf) {
-        const datei = await lokalFetch(`/api/scan/file?name=${encodeURIComponent(fileName)}`);
-        if (!datei.ok) throw new Error("Scan konnte nicht gelesen werden.");
+        const inhalt = await lokalFetch(lesePfad);
+        if (!inhalt.ok) throw new Error("Scan konnte nicht gelesen werden.");
         await apiFetch("/documents", {
           method: "POST",
           body: neuerBelegPayload({
             mandant,
             dateiName: zielName,
-            dataUrl: await dateiZuDataUrl(await datei.blob()),
+            dataUrl: await dateiZuDataUrl(await inhalt.blob()),
           }),
         });
       }
 
-      // 2. Original lokal einsortieren
-      const res = await lokalFetch("/api/scan/assign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName, mandantNr, mandantName: mandant.name, newName }),
-      });
-      if (!res.ok) throw new Error("Einsortieren auf dem Scan-Server fehlgeschlagen.");
+      // 2. Original einsortieren: in Drive verschieben bzw. lokal umlegen
+      const res = ausDrive
+          ? await lokalFetch("/api/drive/assign", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ fileId: datei.id, mandantNr, mandantName: mandant.name, newName: zielName }),
+            })
+          : await lokalFetch("/api/scan/assign", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ fileName, mandantNr, mandantName: mandant.name, newName }),
+            });
+      if (!res.ok) throw new Error(ausDrive
+          ? "Verschieben in Google Drive fehlgeschlagen."
+          : "Einsortieren auf dem Scan-Server fehlgeschlagen.");
 
-      setScanInbox((prev) => prev.filter((f) => f.name !== fileName));
+      setScanInbox((prev) => prev.filter((f) => (ausDrive ? f.id !== datei.id : f.name !== fileName)));
       loadBackendDocs(mandant);
       loadServerDocs(mandant);
       showNotification(istPdf
           ? `Beleg zugeordnet: ${mandant.name} ✓`
-          : `Bild zugeordnet: ${mandant.name} – bleibt lokal, das Backend nimmt nur PDF`);
+          : `Bild zugeordnet: ${mandant.name} – ${ausDrive ? "in Drive verschoben" : "bleibt lokal"}, das Backend nimmt nur PDF`);
     } catch (e) {
       showNotification(`Zuordnung fehlgeschlagen: ${e.message}`, "error");
     }
@@ -361,6 +408,20 @@ export default function App({ user, onLogout }) {
     setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map(d => d.id === docId ? { ...d, status: "analysiert", extractedData: editedData, kategorien: bereinigeKategorien(kategorien), amount: editedData.angerechnetBetrag ?? editedData.gesamtBetrag } : d) }));
     setSelectedDoc(null);
     showNotification("Beleg bestätigt und gespeichert ✓");
+  };
+
+  /**
+   * Export der angezeigten Belege.
+   *
+   * TODO: Hier die eigentliche Logik einsetzen. Zur Verfügung stehen:
+   *   filteredDocs   – die Belege, die gerade in der Liste stehen
+   *   currentMandant – der gewählte Mandant (Name und Nummer)
+   *   filter         – Suchbegriff, Zeitraum, Status und Klassifikation
+   * Denkbar wären z. B. eine CSV-Datei, ein DATEV-Export oder ein ZIP
+   * mit den Originaldateien.
+   */
+  const exportiereBelege = () => {
+    showNotification(`Export von ${filteredDocs.length} Beleg${filteredDocs.length !== 1 ? "en" : ""} die Logik folgt noch.`, "info");
   };
 
   const handleDiscard = async (doc) => {
@@ -538,7 +599,7 @@ export default function App({ user, onLogout }) {
 
             {/* Doc Table */}
             <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e8e4dc", overflow: "hidden" }}>
-              <BelegSuche filter={filter} onChange={setFilter} kategorien={vorhandeneKategorien(docs)}
+              <BelegSuche filter={filter} onChange={setFilter} kategorien={vorhandeneKategorien(docs)} onExport={exportiereBelege}
                           anzahl={filteredDocs.length} gesamt={docs.length} />
               <div style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 60px", padding: "8px 20px", background: "#fafaf8", borderBottom: "1px solid #f0ece4" }}>
                 {["DATEI", "DATUM", "KATEGORIE", "BETRAG", "STATUS", "KI"].map((h) => (
@@ -603,8 +664,8 @@ export default function App({ user, onLogout }) {
 
         {/* Toast */}
         {notification && (
-            <div style={{ position: "fixed", bottom: 24, right: 24, background: notification.type === "error" ? "#fef2f2" : "#f0fdf4", border: `1px solid ${notification.type === "error" ? "#fca5a5" : "#86efac"}`, color: notification.type === "error" ? "#dc2626" : "#16a34a", padding: "11px 16px", borderRadius: 9, fontSize: 13, fontWeight: 500, boxShadow: "0 4px 20px rgba(0,0,0,.08)", animation: "slideIn .3s ease", zIndex: 1000, display: "flex", alignItems: "center", gap: 7 }}>
-              {notification.type === "error" ? <i className="bi bi-exclamation-triangle-fill" /> : <i className="bi bi-check2" />} {notification.msg}
+            <div style={{ position: "fixed", bottom: 24, right: 24, ...(TOAST_STIL[notification.type] ?? TOAST_STIL.success).stil, padding: "11px 16px", borderRadius: 9, fontSize: 13, fontWeight: 500, boxShadow: "0 4px 20px rgba(0,0,0,.08)", animation: "slideIn .3s ease", zIndex: 1000, display: "flex", alignItems: "center", gap: 7 }}>
+              <i className={`bi ${(TOAST_STIL[notification.type] ?? TOAST_STIL.success).icon}`} /> {notification.msg}
             </div>
         )}
       </div>

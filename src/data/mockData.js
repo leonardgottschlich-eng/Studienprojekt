@@ -36,7 +36,7 @@ export const DOCS_BY_MANDANT = {
   1: [
     {
       id: 1, name: "Rechnung_Büromaterial_Jan2025.pdf", size: "1.2 MB", type: "pdf",
-      uploadedAt: "15.01.2025", status: "analysiert", category: "Betriebsausgaben",
+      uploadedAt: "15.01.2025", status: "analysiert", kategorien: ["Betriebsausgaben", "Bürobedarf"],
       amount: "342,50 €", confidence: 94,
       extractedData: {
         aussteller: "Office Depot GmbH", adresse: "Lyoner Str. 15, 60528 Frankfurt",
@@ -53,7 +53,7 @@ export const DOCS_BY_MANDANT = {
     },
     {
       id: 2, name: "Tankquittung_Mai2026.pdf", size: "485 KB", type: "pdf",
-      uploadedAt: "13.05.2026", status: "analysiert", category: "Fahrtkosten",
+      uploadedAt: "13.05.2026", status: "analysiert", kategorien: ["Fahrtkosten", "Betriebsausgaben"],
       amount: "72,72 €", confidence: 91, scanPreview: "totalenergies",
       extractedData: {
         aussteller: "TotalEnergies Mertert", adresse: "48, Route de Wasserbillig, L-6686 Mertert",
@@ -68,7 +68,7 @@ export const DOCS_BY_MANDANT = {
     },
     {
       id: 3, name: "Kontoauszug_Q1_2025.pdf", size: "2.8 MB", type: "pdf",
-      uploadedAt: "01.03.2025", status: "in_bearbeitung", category: "Bankbelege",
+      uploadedAt: "01.03.2025", status: "in_bearbeitung", kategorien: ["Bankbelege"],
       amount: "1.208,90 €", confidence: 62,
       extractedData: {
         aussteller: "Sparkasse Frankfurt", adresse: "Neue Mainzer Str. 47, 60311 Frankfurt",
@@ -83,7 +83,7 @@ export const DOCS_BY_MANDANT = {
     },
     {
       id: 4, name: "Hotelrechnung_Berlin.pdf", size: "890 KB", type: "pdf",
-      uploadedAt: "18.02.2025", status: "analysiert", category: "Reisekosten",
+      uploadedAt: "18.02.2025", status: "analysiert", kategorien: ["Reisekosten", "Bewirtung", "Fahrtkosten"],
       amount: "219,00 €", confidence: 88,
       extractedData: {
         aussteller: "Motel One Berlin-Alexanderplatz", adresse: "Grunerstraße 11, 10179 Berlin",
@@ -102,7 +102,7 @@ export const DOCS_BY_MANDANT = {
   2: [
     {
       id: 5, name: "Honorarrechnung_Q1.pdf", size: "620 KB", type: "pdf",
-      uploadedAt: "31.03.2025", status: "analysiert", category: "Einnahmen",
+      uploadedAt: "31.03.2025", status: "analysiert", kategorien: ["Einnahmen"],
       amount: "4.800,00 €", confidence: 97,
       extractedData: {
         aussteller: "Sabine Hoffmann – Freiberufliche Beraterin", adresse: "Musterstraße 12, 80331 München",
@@ -116,7 +116,7 @@ export const DOCS_BY_MANDANT = {
     },
     {
       id: 6, name: "Bürokosten_März.pdf", size: "310 KB", type: "pdf",
-      uploadedAt: "28.03.2025", status: "ausstehend", category: "Betriebsausgaben",
+      uploadedAt: "28.03.2025", status: "ausstehend", kategorien: ["Betriebsausgaben", "Miete & Nebenkosten"],
       amount: "156,00 €", confidence: 73,
       extractedData: {
         aussteller: "WeWork GmbH", adresse: "Friesenplatz 4, 50672 Köln",

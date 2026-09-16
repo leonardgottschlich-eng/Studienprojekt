@@ -6,7 +6,7 @@ import { ZEITRAUM_PRESETS, presetZeitraum, aktiveFilter, LEERER_FILTER } from ".
  * Kopfzeile der Belegliste: Volltextsuche über die Beleginhalte plus
  * ausklappbarer Filterbereich für Zeitraum, Status und Kategorie.
  */
-export default function BelegSuche({ filter, onChange, kategorien = [], anzahl, gesamt }) {
+export default function BelegSuche({ filter, onChange, kategorien = [], anzahl, gesamt, onExport }) {
     const [offen, setOffen] = useState(false);
     const anzahlFilter = aktiveFilter(filter);
 
@@ -56,6 +56,16 @@ export default function BelegSuche({ filter, onChange, kategorien = [], anzahl, 
                             <span style={{ background: "#18537a", color: "#fff", fontSize: 9.5, fontWeight: 700, borderRadius: 8, padding: "1px 5px" }}>{anzahlFilter}</span>
                         )}
                     </button>
+
+                    {/* Export der aktuell angezeigten Belege */}
+                    {onExport && (
+                        <button onClick={() => onExport(filter)} disabled={!anzahl}
+                                title={anzahl ? `${anzahl} angezeigte Belege exportieren` : "Keine Belege zum Exportieren"}
+                                style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 11px", border: "1px solid #e5e7eb", background: anzahl ? "#f9fafb" : "#f3f4f6", color: anzahl ? "#6b7280" : "#d1d5db", borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: anzahl ? "pointer" : "default", fontFamily: "inherit" }}>
+                            <i className="bi bi-box-arrow-down" style={{ fontSize: 12 }} />
+                            Export
+                        </button>
+                    )}
                 </div>
             </div>
 

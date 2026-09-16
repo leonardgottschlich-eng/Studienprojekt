@@ -14,6 +14,7 @@ function Root() {
         sessionStorage.removeItem("bs_token");
         sessionStorage.removeItem("bs_api_token");
         sessionStorage.removeItem("bs_user");
+        sessionStorage.removeItem("bs_seite");   // nach dem Anmelden wieder auf der Startseite beginnen
         setUser(null);
     };
 

@@ -26,6 +26,18 @@ export function speichereEinstellungen(einstellungen) {
   } catch { /* z. B. privater Modus – Einstellungen gelten dann nur für diese Sitzung */ }
 }
 
+/* Zuletzt geöffnete Seite – im sessionStorage, also pro Browser-Tab.
+   Dadurch bleibt ein Neuladen auf derselben Seite, während ein zweiter Tab
+   unabhängig davon woanders stehen kann. Beim Abmelden wird sie verworfen. */
+const SEITE = "bs_seite";
+
+export const ladeLetzteSeite = () => {
+  try { return sessionStorage.getItem(SEITE); } catch { return null; }
+};
+export const merkeSeite = (seite) => {
+  try { sessionStorage.setItem(SEITE, seite); } catch { /* ignorieren */ }
+};
+
 /* Zuletzt gewählter Mandant */
 export const ladeLetztenMandanten = () => {
   const wert = localStorage.getItem("bs_letzter_mandant");

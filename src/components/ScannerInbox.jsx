@@ -20,9 +20,15 @@ export default function ScannerInbox({ files, mandanten, onAssign }) {
 
     if (!files.length) return null;
 
-    const preview = async (name) => {
+    // Scans kommen aus zwei Quellen: dem lokalen Ordner und Google Drive
+    const schluessel = (f) => (f.quelle === "drive" ? `drive:${f.id}` : f.name);
+
+    const preview = async (f) => {
         try {
-            const res = await lokalFetch(`/api/scan/file?name=${encodeURIComponent(name)}`);
+            const pfad = f.quelle === "drive"
+                ? `/api/drive/file?id=${encodeURIComponent(f.id)}`
+                : `/api/scan/file?name=${encodeURIComponent(f.name)}`;
+            const res = await lokalFetch(pfad);
             if (!res.ok) return;
             const url = URL.createObjectURL(await res.blob());
             window.open(url, "_blank");
@@ -30,15 +36,15 @@ export default function ScannerInbox({ files, mandanten, onAssign }) {
     };
 
     // gewählter Mandant – Fallback auf den Server-Vorschlag
-    const selectedNr = (f) => selection[f.name] ?? f.vorschlag?.nr ?? "";
+    const selectedNr = (f) => selection[schluessel(f)] ?? f.vorschlag?.nr ?? "";
 
     const assign = async (f) => {
         const nr = selectedNr(f);
         if (!nr) return;
         const [origBase] = splitName(f.name);
-        const newBase = (names[f.name] ?? origBase).trim();
-        setBusy(f.name);
-        await onAssign(f.name, nr, newBase && newBase !== origBase ? newBase : null);
+        const newBase = (names[schluessel(f)] ?? origBase).trim();
+        setBusy(schluessel(f));
+        await onAssign(f, nr, newBase && newBase !== origBase ? newBase : null);
         setBusy(null);
     };
 
@@ -53,29 +59,35 @@ export default function ScannerInbox({ files, mandanten, onAssign }) {
 
             {files.map((f, i) => {
                 const [origBase, ext] = splitName(f.name);
+                const k = schluessel(f);
                 return (
-                    <div key={f.name}
+                    <div key={k}
                          style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 20px", borderBottom: i < files.length - 1 ? "1px solid #fef3c7" : "none", flexWrap: "wrap" }}>
                         <FileIcon type={ext.toLowerCase() === ".pdf" ? "pdf" : "image"} />
                         <div style={{ flex: 1, minWidth: 200 }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                                <input type="text" value={names[f.name] ?? origBase}
-                                       onChange={(e) => setNames((prev) => ({ ...prev, [f.name]: e.target.value }))}
+                                <input type="text" value={names[k] ?? origBase}
+                                       onChange={(e) => setNames((prev) => ({ ...prev, [k]: e.target.value }))}
                                        placeholder="Belegname…"
                                        style={{ flex: 1, minWidth: 120, padding: "6px 10px", border: "1px solid #fcd34d", borderRadius: 7, fontSize: 12.5, fontWeight: 500, color: "#111827", background: "#fff", outline: "none" }} />
                                 <span style={{ fontSize: 11.5, color: "#9ca3af" }}>{ext}</span>
                             </div>
-                            <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 3 }}>
-                                {f.size} · {f.createdAt}
-                                {f.vorschlag && <span style={{ color: "#b45309" }}> · Vorschlag: {f.vorschlag.name}</span>}
+                            <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 3, display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                                {/* Herkunft, damit klar ist wo der Scan liegt */}
+                                <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: f.quelle === "drive" ? "#1d4ed8" : "#6b7280" }}>
+                                    <i className={`bi ${f.quelle === "drive" ? "bi-cloud" : "bi-hdd"}`} />
+                                    {f.quelle === "drive" ? "Drive" : "Lokal"}
+                                </span>
+                                · {f.size} · {f.createdAt}
+                                {f.vorschlag && <span style={{ color: "#b45309" }}>· Vorschlag: {f.vorschlag.name}</span>}
                             </div>
                         </div>
-                        <button onClick={() => preview(f.name)} title="Vorschau öffnen"
+                        <button onClick={() => preview(f)} title="Vorschau öffnen"
                                 style={{ background: "none", border: "1px solid #fcd34d", borderRadius: 7, color: "#92400e", fontSize: 13, padding: "6px 10px", cursor: "pointer" }}>
                             <i className="bi bi-eye" />
                         </button>
                         <select value={selectedNr(f)}
-                                onChange={(e) => setSelection((prev) => ({ ...prev, [f.name]: e.target.value }))}
+                                onChange={(e) => setSelection((prev) => ({ ...prev, [k]: e.target.value }))}
                                 style={{ padding: "7px 10px", border: "1px solid #e5e7eb", borderRadius: 7, fontSize: 12, color: "#374151", background: "#fff", outline: "none" }}>
                             <option value="">Mandant wählen…</option>
                             {mandanten.map((m) => (
@@ -83,9 +95,9 @@ export default function ScannerInbox({ files, mandanten, onAssign }) {
                             ))}
                         </select>
                         <button onClick={() => assign(f)}
-                                disabled={!selectedNr(f) || busy === f.name}
+                                disabled={!selectedNr(f) || busy === k}
                                 style={{ padding: "7px 14px", background: selectedNr(f) ? "#fd8f19" : "#e5e7eb", border: "none", borderRadius: 7, color: selectedNr(f) ? "#0b2e44" : "#9ca3af", fontSize: 12, fontWeight: 700, cursor: selectedNr(f) ? "pointer" : "default" }}>
-                            {busy === f.name ? "…" : "Speichern"}
+                            {busy === k ? "…" : "Speichern"}
                         </button>
                     </div>
                 );
