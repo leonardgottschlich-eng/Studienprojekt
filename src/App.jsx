@@ -2,7 +2,11 @@ import 'bootstrap-icons/font/bootstrap-icons.css';
 import { useState, useRef, useCallback, useEffect } from "react";
 
 import { MANDANTEN, DOCS_BY_MANDANT } from "./data/mockData";
-import { apiFetch, userToMandant, documentToDoc, updatePayload } from "./api";
+import { apiFetch, userToMandant, documentToDoc, updatePayload, dateiZuDataUrl, neuerBelegPayload } from "./api";
+import { filterBelege, trefferFeld, vorhandeneKategorien, LEERER_FILTER } from "./utils/belegFilter";
+import { kategorienVon, bereinigeKategorien } from "./data/kategorien";
+import { lokalFetch } from "./localServer";
+import { ladeEinstellungen, speichereEinstellungen, ladeLetztenMandanten, merkeMandanten } from "./settings";
 import { useUpload } from "./hooks/useUpload";
 import MandantAvatar from "./components/MandantAvatar";
 import FileIcon from "./components/FileIcon";
@@ -13,13 +17,18 @@ import BottomNav from "./components/BottomNav";
 import DocumentScanModal from "./components/DocumentScanModal";
 import DocDetailModal from "./components/DocDetailModal";
 import ScannerInbox from "./components/ScannerInbox";
+import BelegSuche from "./components/BelegSuche";
+import SettingsPage from "./components/SettingsPage";
+import KategorieChips from "./components/KategorieChips";
 
 export default function App({ user, onLogout }) {
   const [allDocs, setAllDocs]         = useState({ ...DOCS_BY_MANDANT });
   const [mandanten, setMandanten]     = useState(MANDANTEN);
   const [currentMandant, setCurrentMandant] = useState(MANDANTEN[0]);
   const [dragging, setDragging]       = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [filter, setFilter]           = useState({ ...LEERER_FILTER });
+  const [page, setPage]               = useState("belege");
+  const [einstellungen, setEinstellungen] = useState(ladeEinstellungen);
   const [notification, setNotification] = useState(null);
   const [cameraOpen, setCameraOpen]   = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -34,6 +43,18 @@ export default function App({ user, onLogout }) {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  // Einstellungen bei jeder Änderung sichern
+  useEffect(() => { speichereEinstellungen(einstellungen); }, [einstellungen]);
+
+  const navigiere = (seite) => {
+    if (seite === "dashboard") {
+      showNotification("Das Dashboard ist noch nicht verfügbar.", "error");
+      return;
+    }
+    setPage(seite);
+    setSidebarOpen(false);
+  };
+
   const showNotification = (msg, type = "success") => {
     setNotification({ msg, type });
     setTimeout(() => setNotification(null), 3500);
@@ -45,10 +66,7 @@ export default function App({ user, onLogout }) {
       await apiFetch("/logout", { method: "POST" });
     } catch { /* Backend-Logout optional */ }
     try {
-      await fetch("/api/auth/logout", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
-      });
+      await lokalFetch("/api/auth/logout", { method: "POST" });
     } catch {
       // Server-Logout optional – Frontend meldet trotzdem ab
     }
@@ -78,7 +96,9 @@ export default function App({ user, onLogout }) {
         const liste = (data || []).filter((u) => u.groups?.includes("client")).map(userToMandant);
         if (!liste.length) return;
         setMandanten(liste);
-        setCurrentMandant(liste[0]);
+        // Auf Wunsch beim zuletzt gewählten Mandanten weitermachen
+        const gemerkt = einstellungen.mandantMerken ? ladeLetztenMandanten() : null;
+        setCurrentMandant(liste.find((m) => m.id === gemerkt) ?? liste[0]);
         setAllDocs({});
       } catch {
         console.warn("Backend nicht erreichbar – Demo-Modus mit Mock-Daten.");
@@ -95,7 +115,10 @@ export default function App({ user, onLogout }) {
           .filter((d) => (d.client_user_id ?? d.user_id) === mandant.id)
           .map(documentToDoc);
       setAllDocs((prev) => {
-        const andere = (prev[mandant.id] || []).filter((d) => !d.backendDoc);
+        // Zugeordnete Scans liegen zusätzlich lokal im Mandantenordner – der
+        // Beleg aus der Datenbank gewinnt, damit er nicht doppelt erscheint
+        const namen = new Set(docs.map((d) => d.name));
+        const andere = (prev[mandant.id] || []).filter((d) => !d.backendDoc && !namen.has(d.name));
         return { ...prev, [mandant.id]: [...docs, ...andere] };
       });
     } catch { /* Backend nicht erreichbar */ }
@@ -104,16 +127,14 @@ export default function App({ user, onLogout }) {
   // Belege vom Server laden
   const loadServerDocs = useCallback(async (mandant) => {
     try {
-      const res = await fetch(`/api/belege?mandantNr=${encodeURIComponent(mandant.nr)}&mandantName=${encodeURIComponent(mandant.name)}`, {
-        headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
-      });
+      const res = await lokalFetch(`/api/belege?mandantNr=${encodeURIComponent(mandant.nr)}&mandantName=${encodeURIComponent(mandant.name)}`);
       if (!res.ok) return;
       const { files } = await res.json();
       if (!files?.length) return;
       const serverDocs = files.map((f, i) => ({
         id: `server_${mandant.id}_${i}_${f.name}`, name: f.name, size: f.size,
         type: f.name.toLowerCase().endsWith(".pdf") ? "pdf" : "image",
-        uploadedAt: f.createdAt, status: "ausstehend", category: "Nicht klassifiziert", amount: "---",
+        uploadedAt: f.createdAt, status: "ausstehend", kategorien: [], amount: "---",
         serverFile: true,
       }));
       setAllDocs((prev) => {
@@ -134,52 +155,79 @@ export default function App({ user, onLogout }) {
     loadServerDocs(currentMandant);
   }, [currentMandant]);
 
-  // Scanner-Eingang abfragen (alle 10 s) – automatisch zugeordnete Scans
-  // erscheinen dabei über loadServerDocs direkt in der Belegliste
+  // Scanner-Eingang abfragen – Takt und An/Aus kommen aus den Einstellungen.
+  // Zugeordnete Scans erscheinen dabei über loadServerDocs in der Belegliste.
   useEffect(() => {
     const fetchInbox = async () => {
       try {
-        const res = await fetch("/api/scan/inbox", {
-          headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
-        });
+        const res = await lokalFetch("/api/scan/inbox");
         if (!res.ok) return;
         const { files } = await res.json();
         setScanInbox(files || []);
       } catch {}
     };
     fetchInbox();
+    if (!einstellungen.autoAktualisieren) return;
     const timer = setInterval(() => {
       fetchInbox();
       loadServerDocs(currentMandant);
       loadBackendDocs(currentMandant);
-    }, 10000);
+    }, Math.max(5, einstellungen.intervallSekunden) * 1000);
     return () => clearInterval(timer);
-  }, [currentMandant]);
+  }, [currentMandant, einstellungen.autoAktualisieren, einstellungen.intervallSekunden]);
 
-  // Scan benennen und einem Mandanten zuweisen (newName optional)
+  /**
+   * Scan benennen, einem Mandanten zuordnen und als Beleg ins Backend übernehmen.
+   * Das Original wandert zusätzlich in den Mandantenordner des Scan-Servers und
+   * bleibt dort als lokales Archiv liegen.
+   */
   const assignScan = async (fileName, mandantNr, newName = null) => {
     const mandant = mandanten.find((m) => m.nr === mandantNr);
+    if (!mandant) { showNotification("Unbekannter Mandant.", "error"); return; }
+
+    const endung   = fileName.slice(fileName.lastIndexOf("."));
+    const zielName = newName ? `${newName}${endung}` : fileName;
+    const istPdf   = /\.pdf$/i.test(fileName);
+
     try {
-      const res = await fetch("/api/scan/assign", {
+      // 1. Beleg in der Datenbank anlegen – zuerst, damit bei einem Fehler
+      //    noch nichts verschoben wurde. Bilder kann das Backend nicht annehmen.
+      if (istPdf) {
+        const datei = await lokalFetch(`/api/scan/file?name=${encodeURIComponent(fileName)}`);
+        if (!datei.ok) throw new Error("Scan konnte nicht gelesen werden.");
+        await apiFetch("/documents", {
+          method: "POST",
+          body: neuerBelegPayload({
+            mandant,
+            dateiName: zielName,
+            dataUrl: await dateiZuDataUrl(await datei.blob()),
+          }),
+        });
+      }
+
+      // 2. Original lokal einsortieren
+      const res = await lokalFetch("/api/scan/assign", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionStorage.getItem("bs_token")}`,
-        },
-        body: JSON.stringify({ fileName, mandantNr, mandantName: mandant?.name, newName }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName, mandantNr, mandantName: mandant.name, newName }),
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error("Einsortieren auf dem Scan-Server fehlgeschlagen.");
+
       setScanInbox((prev) => prev.filter((f) => f.name !== fileName));
-      if (mandant) loadServerDocs(mandant);
-      showNotification(`Scan zugeordnet: ${mandant?.name ?? mandantNr} ✓`);
-    } catch {
-      showNotification("Zuordnung fehlgeschlagen.", "error");
+      loadBackendDocs(mandant);
+      loadServerDocs(mandant);
+      showNotification(istPdf
+          ? `Beleg zugeordnet: ${mandant.name} ✓`
+          : `Bild zugeordnet: ${mandant.name} – bleibt lokal, das Backend nimmt nur PDF`);
+    } catch (e) {
+      showNotification(`Zuordnung fehlgeschlagen: ${e.message}`, "error");
     }
   };
 
   const selectMandant = (m) => {
     setCurrentMandant(m);
-    setSearchQuery("");
+    setFilter({ ...LEERER_FILTER });
+    merkeMandanten(m.id);
     showNotification(`Mandant gewechselt: ${m.name}`);
   };
 
@@ -194,12 +242,13 @@ export default function App({ user, onLogout }) {
     if (!pending.length) { showNotification("Keine ausstehenden Belege.", "error"); return; }
     setAllDocs((prev) => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map((d) => d.status === "ausstehend" ? { ...d, status: "in_bearbeitung" } : d) }));
     setTimeout(() => {
-      setAllDocs((prev) => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map((d) => d.status === "in_bearbeitung" ? { ...d, status: "analysiert", category: d.category === "Nicht klassifiziert" ? "Sonstige Ausgaben" : d.category } : d) }));
+      // Ohne Klassifikation vergibt die Analyse eine Startkategorie – vorhandene bleiben unberührt
+      setAllDocs((prev) => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map((d) => d.status === "in_bearbeitung" ? { ...d, status: "analysiert", kategorien: kategorienVon(d).length ? kategorienVon(d) : ["Sonstige Ausgaben"] } : d) }));
       showNotification("KI-Analyse abgeschlossen ✓");
     }, 2800);
   };
 
-  const handleConfirm = async (docId, editedData) => {
+  const handleConfirm = async (docId, editedData, kategorien = []) => {
     const doc = (allDocs[currentMandant.id] || []).find((d) => d.id === docId);
 
     // Backend-Belege: bestätigte Daten in die Datenbank schreiben
@@ -207,7 +256,7 @@ export default function App({ user, onLogout }) {
       try {
         await apiFetch(`/documents/${doc.apiId}`, {
           method: "PATCH",
-          body: updatePayload(editedData, doc.category),
+          body: updatePayload(editedData, kategorien),
         });
       } catch (e) {
         showNotification(`Speichern im Backend fehlgeschlagen: ${e.message}`, "error");
@@ -215,7 +264,7 @@ export default function App({ user, onLogout }) {
       }
     }
 
-    setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map(d => d.id === docId ? { ...d, status: "analysiert", extractedData: editedData, amount: editedData.angerechnetBetrag ?? editedData.gesamtBetrag } : d) }));
+    setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map(d => d.id === docId ? { ...d, status: "analysiert", extractedData: editedData, kategorien: bereinigeKategorien(kategorien), amount: editedData.angerechnetBetrag ?? editedData.gesamtBetrag } : d) }));
     setSelectedDoc(null);
     showNotification("Beleg bestätigt und gespeichert ✓");
   };
@@ -234,9 +283,8 @@ export default function App({ user, onLogout }) {
     // nächsten Abgleich (Polling) wieder in der Liste auf
     if (doc.serverFile) {
       try {
-        const res = await fetch(`/api/belege/file?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}&name=${encodeURIComponent(doc.name)}`, {
+        const res = await lokalFetch(`/api/belege/file?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}&name=${encodeURIComponent(doc.name)}`, {
           method: "DELETE",
-          headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_token")}` },
         });
         if (!res.ok) throw new Error();
       } catch {
@@ -250,10 +298,7 @@ export default function App({ user, onLogout }) {
   };
 
   const docs = allDocs[currentMandant.id] || [];
-  const filteredDocs = docs.filter((d) =>
-      d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      d.category.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredDocs = filterBelege(docs, filter);
   const stats = {
     total:      docs.length,
     analysiert: docs.filter((d) => d.status === "analysiert").length,
@@ -298,7 +343,7 @@ export default function App({ user, onLogout }) {
 
         {/* Modals */}
         {cameraOpen && <DocumentScanModal onClose={() => setCameraOpen(false)} onCapture={(file) => uploadToLocal([file])} />}
-        {selectedDoc && <DocDetailModal doc={selectedDoc} mandant={currentMandant} onClose={() => setSelectedDoc(null)} onConfirm={(ed) => handleConfirm(selectedDoc.id, ed)} onDiscard={() => handleDiscard(selectedDoc)} />}
+        {selectedDoc && <DocDetailModal doc={selectedDoc} mandant={currentMandant} onClose={() => setSelectedDoc(null)} onConfirm={(ed, kats) => handleConfirm(selectedDoc.id, ed, kats)} onDiscard={() => handleDiscard(selectedDoc)} />}
 
         {/* Sidebar overlay */}
         {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
@@ -307,10 +352,14 @@ export default function App({ user, onLogout }) {
         <MobileTopbar onMenuClick={() => setSidebarOpen((v) => !v)} onCameraClick={() => setCameraOpen(true)} />
 
         {/* Sidebar */}
-        <Sidebar currentMandant={currentMandant} mandanten={mandanten} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} />
+        <Sidebar currentMandant={currentMandant} mandanten={mandanten} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} activePage={page} onNavigate={navigiere} />
 
         {/* Main */}
         <main className="main-content" style={{ marginLeft: 240, flex: 1, minWidth: 0, padding: isMobile ? "90px 16px 84px" : "30px 32px", animation: "fadeUp .4s ease", display: "flex", justifyContent: "center", background: "#f8f7f4" }}>
+          {page === "einstellungen" ? (
+              <SettingsPage user={user} einstellungen={einstellungen} setEinstellungen={setEinstellungen}
+                            showNotification={showNotification} isMobile={isMobile} />
+          ) : (
           <div style={{ width: "100%", maxWidth: 900 }}>
 
             {/* Header */}
@@ -337,7 +386,9 @@ export default function App({ user, onLogout }) {
             </div>
 
             {/* Scanner-Eingang: unzugeordnete Scans manuell zuweisen */}
-            <ScannerInbox files={scanInbox} mandanten={mandanten} onAssign={assignScan} />
+            {einstellungen.scannerEingangAnzeigen && (
+                <ScannerInbox files={scanInbox} mandanten={mandanten} onAssign={assignScan} />
+            )}
 
             {/* Upload Zone */}
             <div onDrop={onDrop} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
@@ -371,23 +422,28 @@ export default function App({ user, onLogout }) {
 
             {/* Doc Table */}
             <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e8e4dc", overflow: "hidden" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid #f0ece4" }}>
-                <h2 style={{ fontSize: 14, fontWeight: 600, color: "#0b2e44" }}>
-                  Hochgeladene Belege
-                  <span style={{ marginLeft: 6, background: "#f3f4f6", color: "#6b7280", fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 9 }}>{filteredDocs.length}</span>
-                </h2>
-                <input type="text" placeholder="Belege suchen…" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-                       style={{ padding: "6px 12px", border: "1px solid #e5e7eb", borderRadius: 7, fontSize: 12, color: "#374151", background: "#f9fafb", width: 175, outline: "none" }} />
-              </div>
+              <BelegSuche filter={filter} onChange={setFilter} kategorien={vorhandeneKategorien(docs)}
+                          anzahl={filteredDocs.length} gesamt={docs.length} />
               <div style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 60px", padding: "8px 20px", background: "#fafaf8", borderBottom: "1px solid #f0ece4" }}>
                 {["DATEI", "DATUM", "KATEGORIE", "BETRAG", "STATUS", "KI"].map((h) => (
                     <span key={h} style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", letterSpacing: ".06em" }}>{h}</span>
                 ))}
               </div>
               {filteredDocs.length === 0 ? (
-                  <div style={{ padding: "40px", textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Keine Belege gefunden.</div>
+                  <div style={{ padding: "40px 20px", textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
+                    {docs.length === 0 ? "Noch keine Belege für diesen Mandanten." : (
+                        <>
+                          Kein Beleg passt zu Suche und Zeitraum.
+                          <button onClick={() => setFilter({ ...LEERER_FILTER })}
+                                  style={{ display: "block", margin: "10px auto 0", background: "none", border: "none", color: "#18537a", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                            Filter zurücksetzen
+                          </button>
+                        </>
+                    )}
+                  </div>
               ) : filteredDocs.map((doc, i) => {
                 const conf = doc.confidence;
+                const treffer = trefferFeld(doc, filter.query);
                 const confColor = !conf ? "#d1d5db" : conf >= 85 ? "#16a34a" : conf >= 65 ? "#d97706" : "#dc2626";
                 return (
                     <div key={doc.id} onClick={() => setSelectedDoc(doc)}
@@ -396,13 +452,17 @@ export default function App({ user, onLogout }) {
                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <FileIcon type={doc.type} />
-                        <div>
+                        <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: 12.5, fontWeight: 500, color: "#111827", marginBottom: 1 }}>{doc.name}</div>
-                          <div style={{ fontSize: 10.5, color: "#9ca3af" }}>{doc.size}</div>
+                          <div style={{ fontSize: 10.5, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {doc.size}
+                            {/* Zeigt an, wo der Suchbegriff steckt, wenn nicht im Dateinamen */}
+                            {treffer && <span style={{ color: "#b45309" }}> · {treffer.label}: {treffer.wert}</span>}
+                          </div>
                         </div>
                       </div>
                       <span style={{ fontSize: 12, color: "#6b7280" }}>{doc.uploadedAt}</span>
-                      <span style={{ fontSize: 11, color: "#374151", background: "#f3f4f6", padding: "3px 7px", borderRadius: 5, fontWeight: 500 }}>{doc.category}</span>
+                      <KategorieChips doc={doc} />
                       <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{doc.amount}</span>
                       <StatusBadge status={doc.status} />
                       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -418,10 +478,11 @@ export default function App({ user, onLogout }) {
               })}
             </div>
           </div>
+          )}
         </main>
 
         {/* Bottom Nav */}
-        <BottomNav/>
+        <BottomNav activePage={page} onNavigate={navigiere} />
 
         {/* Toast */}
         {notification && (

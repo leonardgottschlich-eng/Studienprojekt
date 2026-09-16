@@ -1,7 +1,6 @@
 import { useState } from "react";
 import FileIcon from "./FileIcon";
-
-const getToken = () => sessionStorage.getItem("bs_token") || "";
+import { lokalFetch } from "../localServer";
 
 // "Scan_123.pdf" → ["Scan_123", ".pdf"]
 const splitName = (name) => {
@@ -23,9 +22,7 @@ export default function ScannerInbox({ files, mandanten, onAssign }) {
 
     const preview = async (name) => {
         try {
-            const res = await fetch(`/api/scan/file?name=${encodeURIComponent(name)}`, {
-                headers: { Authorization: `Bearer ${getToken()}` },
-            });
+            const res = await lokalFetch(`/api/scan/file?name=${encodeURIComponent(name)}`);
             if (!res.ok) return;
             const url = URL.createObjectURL(await res.blob());
             window.open(url, "_blank");

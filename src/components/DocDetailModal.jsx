@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import FileIcon from './FileIcon';
 import StatusBadge from './StatusBadge';
+import { KATEGORIEN, kategorienVon, bereinigeKategorien } from '../data/kategorien';
+import { lokalFetch } from '../localServer';
 
 /* Leeres Datengerüst für Belege ohne KI-Extraktion (hochgeladene/gescannte
    Dateien vom Server) – gleiche Ansicht, nur ohne eingetragene Zahlen. */
@@ -54,13 +56,11 @@ function ServerFilePreview({ doc, mandant }) {
     const load = async () => {
       try {
         // fetch statt <img src>, weil beide Server den Auth-Header verlangen
-        const url = doc.backendDoc
-            ? `/backend/api/documents/${doc.apiId}/pdf`
-            : `/api/belege/file?mandantNr=${encodeURIComponent(mandant.nr)}&mandantName=${encodeURIComponent(mandant.name)}&name=${encodeURIComponent(doc.name)}`;
-        const token = doc.backendDoc
-            ? sessionStorage.getItem("bs_api_token")
-            : sessionStorage.getItem("bs_token");
-        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        const res = doc.backendDoc
+            ? await fetch(`/backend/api/documents/${doc.apiId}/pdf`, {
+                headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_api_token")}` },
+              })
+            : await lokalFetch(`/api/belege/file?mandantNr=${encodeURIComponent(mandant.nr)}&mandantName=${encodeURIComponent(mandant.name)}&name=${encodeURIComponent(doc.name)}`);
         if (!res.ok) throw new Error();
         objectUrl = URL.createObjectURL(await res.blob());
         setFileUrl(objectUrl);
@@ -145,7 +145,7 @@ function ScanPreview({ doc }) {
             <div>Keine Rückerstattung</div>
             <div>Umtausch innerhalb von 15 Tagen</div>
             <div style={{ marginTop: 6 }}>Dieser Beleg gilt als Rechnung</div>
-            <div>Merci et bonne route 🚗</div>
+            <div>Merci et bonne route </div>
           </div>
         </div>
     );
@@ -257,7 +257,19 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
   const [included, setIncluded] = useState(
       () => (doc.extractedData?.positionen ?? []).map(p => p.angerechnet !== false)
   );
+  // Ein Beleg kann mehrere Klassifikationen tragen (1:n)
+  const [kategorien, setKategorien] = useState(() => kategorienVon(doc));
+  const [neueKategorie, setNeueKategorie] = useState("");
   const ed = doc.extractedData ?? LEERE_DATEN;
+
+  const kategorieHinzufuegen = (wert) => {
+    const name = String(wert ?? neueKategorie).trim();
+    if (!name) return;
+    setKategorien((prev) => bereinigeKategorien([...prev, name]));
+    setNeueKategorie("");
+  };
+  const kategorieEntfernen = (name) => setKategorien((prev) => prev.filter((k) => k !== name));
+  const vorschlaege = KATEGORIEN.filter((k) => !kategorien.includes(k));
 
   const positionen = editMode ? edited.positionen : ed.positionen;
   const calc = berechneAnrechnung(positionen, included);
@@ -373,6 +385,62 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
                 <FieldRow label="Zahlungsart" fieldKey="zahlungsart" editMode={editMode} edited={edited} setEdited={setEdited} ed={ed} />
               </div>
 
+              {/* Klassifikation – ein Beleg kann mehreren Kategorien zugeordnet sein */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                  <span style={labelStyle}>KLASSIFIKATION</span>
+                  <span style={{ fontSize: 10, color: "#9ca3af" }}>Mehrfachzuordnung möglich</span>
+                </div>
+                <div style={{ background: "#fafaf8", borderRadius: 8, border: "1px solid #f0ece4", padding: "10px 12px" }}>
+                  {/* Gewählte Klassifikationen */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: kategorien.length ? 10 : 0 }}>
+                    {kategorien.length === 0 && (
+                        <span style={{ fontSize: 11.5, color: "#9ca3af" }}>Noch nicht klassifiziert</span>
+                    )}
+                    {kategorien.map((k) => (
+                        <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#eef2f6", color: "#18537a", fontSize: 11.5, fontWeight: 600, padding: "4px 6px 4px 10px", borderRadius: 14 }}>
+                          {k}
+                          <button onClick={() => kategorieEntfernen(k)} title={`"${k}" entfernen`}
+                                  style={{ background: "none", border: "none", cursor: "pointer", color: "#18537a", fontSize: 12, lineHeight: 1, padding: 0, display: "flex", opacity: 0.65 }}
+                                  onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
+                                  onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.65)}>
+                            <i className="bi bi-x-circle-fill" />
+                          </button>
+                        </span>
+                    ))}
+                  </div>
+
+                  {/* Hinzufügen: Auswahlliste oder eigener Text */}
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input list="bs-kategorien" value={neueKategorie} placeholder="Klassifikation wählen oder eintippen…"
+                           onChange={(e) => setNeueKategorie(e.target.value)}
+                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); kategorieHinzufuegen(); } }}
+                           style={{ ...fieldStyle, flex: 1, background: "#fff" }} />
+                    <datalist id="bs-kategorien">
+                      {vorschlaege.map((k) => <option key={k} value={k} />)}
+                    </datalist>
+                    <button onClick={() => kategorieHinzufuegen()} disabled={!neueKategorie.trim()}
+                            style={{ display: "flex", alignItems: "center", gap: 5, padding: "7px 12px", background: neueKategorie.trim() ? "#18537a" : "#e5e7eb", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, color: neueKategorie.trim() ? "#fff" : "#9ca3af", cursor: neueKategorie.trim() ? "pointer" : "default", fontFamily: "inherit" }}>
+                      <i className="bi bi-plus-lg" /> Hinzufügen
+                    </button>
+                  </div>
+
+                  {/* Häufige Klassifikationen zum Antippen */}
+                  {vorschlaege.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 9 }}>
+                        {vorschlaege.slice(0, 5).map((k) => (
+                            <button key={k} onClick={() => kategorieHinzufuegen(k)}
+                                    style={{ padding: "3px 9px", border: "1px dashed #d6cfc4", borderRadius: 14, background: "transparent", color: "#6b7280", fontSize: 10.5, cursor: "pointer", fontFamily: "inherit" }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.background = "#fff"; e.currentTarget.style.color = "#18537a"; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#6b7280"; }}>
+                              + {k}
+                            </button>
+                        ))}
+                      </div>
+                  )}
+                </div>
+              </div>
+
               {/* Positionen */}
               <div style={{ marginBottom: 20 }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
@@ -434,7 +502,7 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
                   })}
                   {(positionen ?? []).length === 0 && !editMode && (
                       <div style={{ padding: "18px 12px", textAlign: "center", fontSize: 12, color: "#9ca3af" }}>
-                        Keine Positionen erfasst — über „Bearbeiten“ hinzufügen.
+                        Keine Positionen erfasst. Über „Bearbeiten“ hinzufügen.
                       </div>
                   )}
                   {editMode && (
@@ -522,7 +590,7 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
 
               {/* Bearbeiten / Speichern */}
               {editMode ? (
-                  <button onClick={() => { setEditMode(false); onConfirm(withFlags(edited)); }}
+                  <button onClick={() => { setEditMode(false); onConfirm(withFlags(edited), kategorien); }}
                           style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 18px", background: "#18537a", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
                     <i className="bi bi-floppy" /> Änderungen speichern
                   </button>
@@ -537,7 +605,7 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
 
               {/* Bestätigen */}
               {!editMode && (
-                  <button onClick={() => onConfirm(withFlags(ed))}
+                  <button onClick={() => onConfirm(withFlags(ed), kategorien)}
                           style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 20px", background: "linear-gradient(135deg,#16a34a,#22c55e)", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer", boxShadow: "0 2px 8px rgba(22,163,74,.3)" }}>
                     <i className="bi bi-check2-circle" /> Bestätigen
                   </button>

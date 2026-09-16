@@ -1,17 +1,6 @@
 import { useState } from "react";
-import { apiFetch, documentToDoc } from "../api";
-
-// Token des lokalen Scan-Servers aus sessionStorage holen
-const getToken = () => sessionStorage.getItem("bs_token") || "";
-
-// Datei → data:application/pdf;base64,… (das Backend akzeptiert die volle Data-URL)
-const fileToDataUrl = (file) =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
+import { apiFetch, documentToDoc, dateiZuDataUrl, neuerBelegPayload } from "../api";
+import { lokalFetch } from "../localServer";
 
 export function useUpload(currentMandant, setAllDocs, showNotification) {
   const [uploading, setUploading]           = useState(false);
@@ -22,18 +11,11 @@ export function useUpload(currentMandant, setAllDocs, showNotification) {
   const uploadPdfToBackend = async (file) => {
     const { data } = await apiFetch("/documents", {
       method: "POST",
-      body: {
-        client_user_id: currentMandant.id,
-        invoice_number: `UPL-${Date.now()}`,
-        issuer_name: "Unbekannt",
-        recipient_name: currentMandant.name,
-        invoice_date: new Date().toISOString().slice(0, 10),
-        currency: "EUR",
-        total_amount: "0.00",
-        status: "pending",
-        original_file_name: file.name,
-        pdf_base64: await fileToDataUrl(file),
-      },
+      body: neuerBelegPayload({
+        mandant: currentMandant,
+        dateiName: file.name,
+        dataUrl: await dateiZuDataUrl(file),
+      }),
     });
     return documentToDoc(data);
   };
@@ -42,13 +24,9 @@ export function useUpload(currentMandant, setAllDocs, showNotification) {
   const uploadImageToLocal = async (file, i) => {
     const formData = new FormData();
     formData.append("file", file);
-    const response = await fetch(
+    const response = await lokalFetch(
         `/api/upload?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}`,
-        {
-          method: "POST",
-          headers: { Authorization: `Bearer ${getToken()}` },
-          body: formData,
-        }
+        { method: "POST", body: formData }
     );
     if (!response.ok) throw new Error("Lokaler Server nicht erreichbar");
     const result = await response.json();
@@ -60,7 +38,7 @@ export function useUpload(currentMandant, setAllDocs, showNotification) {
       type: "image",
       uploadedAt: new Date().toLocaleDateString("de-DE"),
       status: "ausstehend",
-      category: "Nicht klassifiziert",
+      kategorien: [],
       amount: "—",
       serverFile: true,
     };

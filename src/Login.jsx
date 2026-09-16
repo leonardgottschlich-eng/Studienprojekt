@@ -40,17 +40,8 @@ export default function Login({ onLogin }) {
       sessionStorage.setItem("bs_api_token", data.access_token);
       sessionStorage.setItem("bs_user", JSON.stringify(user));
 
-      // Zusätzlich still am lokalen Scan-Server anmelden – der verwaltet
-      // Scanner-Eingang und Bild-Uploads. Ist er aus, fehlen nur diese Funktionen.
-      try {
-        const lokal = await fetch("/api/auth/login", {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ email: "doerte@kanzlei.de", password: "billsquid123" }),
-        });
-        if (lokal.ok) sessionStorage.setItem("bs_token", (await lokal.json()).token);
-      } catch { /* Scanner-Funktionen dann inaktiv */ }
-
+      // Am lokalen Scan-Server meldet sich die App bei Bedarf selbst an
+      // (siehe localServer.js) – er muss beim Login noch nicht laufen.
       onLogin(user);
     } catch {
       // Ein fetch-Fehler heißt nur "Verbindung kam nicht zustande" – die Ursache

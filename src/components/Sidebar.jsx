@@ -1,7 +1,7 @@
 import { useState } from "react";
 import MandantAvatar from "./MandantAvatar";
 
-export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSelectMandant, onClose, user, onLogout }) {
+export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSelectMandant, onClose, user, onLogout, activePage = "belege", onNavigate }) {
     const [search, setSearch] = useState("");
     const [dropdownOpen, setDropdownOpen] = useState(false);
 
@@ -72,16 +72,19 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
             {/* Nav */}
             <nav style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 10px" }}>
                 {[
-                    { icon: "bi-border-all",      label: "Dashboard" },
-                    { icon: "bi-folder",          label: "Belege",        active: true },
-                    { icon: "bi-bar-chart-line",  label: "Auswertungen" },
-                    { icon: "bi-gear",            label: "Einstellungen" },
-                ].map((item) => (
-                    <div key={item.label} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", borderRadius: 7, background: item.active ? "rgba(201,168,76,.12)" : "transparent", color: item.active ? "#fd8f19" : "#7ab8d0", fontSize: 13, fontWeight: item.active ? 600 : 400, cursor: "pointer", marginBottom: 2, borderLeft: item.active ? "2px solid #fd8f19" : "2px solid transparent" }}>
-                        <i className={`bi ${item.icon}`} style={{ fontSize: 15 }} />
-                        {item.label}
-                    </div>
-                ))}
+                    { icon: "bi-border-all", label: "Dashboard",     seite: "dashboard" },
+                    { icon: "bi-folder",     label: "Belege",        seite: "belege" },
+                    { icon: "bi-gear",       label: "Einstellungen", seite: "einstellungen" },
+                ].map((item) => {
+                    const active = item.seite === activePage;
+                    return (
+                        <div key={item.label} onClick={() => { onNavigate?.(item.seite); onClose(); }}
+                             style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", borderRadius: 7, background: active ? "rgba(201,168,76,.12)" : "transparent", color: active ? "#fd8f19" : "#7ab8d0", fontSize: 13, fontWeight: active ? 600 : 400, cursor: "pointer", marginBottom: 2, borderLeft: active ? "2px solid #fd8f19" : "2px solid transparent", transition: "color .15s" }}>
+                            <i className={`bi ${item.icon}`} style={{ fontSize: 15 }} />
+                            {item.label}
+                        </div>
+                    );
+                })}
             </nav>
 
             {/* User */}

@@ -6,6 +6,8 @@
  * Endpunkte und Datenmodelle: siehe frontend-api.md
  */
 
+import { bereinigeKategorien } from "./data/kategorien";
+
 export const getApiToken = () => sessionStorage.getItem("bs_api_token") || "";
 
 export async function apiFetch(path, { method = "GET", body, token = getApiToken() } = {}) {
@@ -24,6 +26,34 @@ export async function apiFetch(path, { method = "GET", body, token = getApiToken
   }
   return data;
 }
+
+/** Datei oder Blob → "data:application/pdf;base64,…" (das Backend nimmt die volle Data-URL) */
+export const dateiZuDataUrl = (datei) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(datei);
+    });
+
+/**
+ * Payload für einen frisch eingegangenen Beleg (Upload oder Scanner-Eingang).
+ * Das Backend verlangt Rechnungsfelder als Pflichtangaben, ein roher Scan hat
+ * die noch nicht – daher Platzhalter. Die echten Werte trägt man später im
+ * Detail-Modal nach, sie gehen dann per PATCH an dieselbe Stelle.
+ */
+export const neuerBelegPayload = ({ mandant, dateiName, dataUrl }) => ({
+  client_user_id: mandant.id,
+  invoice_number: `UPL-${Date.now()}`,
+  issuer_name: "Unbekannt",
+  recipient_name: mandant.name,
+  invoice_date: new Date().toISOString().slice(0, 10),
+  currency: "EUR",
+  total_amount: "0.00",
+  status: "pending",
+  original_file_name: dateiName,
+  pdf_base64: dataUrl,
+});
 
 /* ── Mapping Backend ↔ Frontend ─────────────────────────────────── */
 
@@ -72,7 +102,9 @@ export function documentToDoc(d) {
     type: "pdf",
     uploadedAt: deDatum(d.created_at),
     status: d.status === "pending" ? "ausstehend" : d.status === "in_bearbeitung" ? "in_bearbeitung" : "analysiert",
-    category: extra.category || "Nicht klassifiziert",
+    // Mehrere Klassifikationen je Beleg; Belege aus der Zeit mit nur einer
+    // Kategorie werden weiterhin gelesen
+    kategorien: bereinigeKategorien(extra.kategorien ?? (extra.category ? [extra.category] : [])),
     amount: extra.angerechnetBetrag ?? (formatBetrag(d.total_amount) || "---"),
     extractedData: {
       aussteller: d.issuer_name === "Unbekannt" ? "" : d.issuer_name || "",
@@ -92,7 +124,8 @@ export function documentToDoc(d) {
 }
 
 // Bestätigte Belegdaten aus dem Detail-Modal → PATCH-Payload fürs Backend
-export function updatePayload(editedData, category, status = "analysiert") {
+export function updatePayload(editedData, kategorien = [], status = "analysiert") {
+  const liste = bereinigeKategorien(kategorien);
   return {
     status,
     invoice_number: editedData.rechnungsnr || undefined,
@@ -103,7 +136,8 @@ export function updatePayload(editedData, category, status = "analysiert") {
     tax_amount: parseBetrag(editedData.mwstBetrag).toFixed(2),
     total_amount: parseBetrag(editedData.gesamtBetrag).toFixed(2),
     notes: JSON.stringify({
-      category,
+      kategorien: liste,
+      category: liste[0] ?? null,   // für ältere Auswertungen, die ein Einzelfeld erwarten
       positionen: editedData.positionen ?? [],
       angerechnetBetrag: editedData.angerechnetBetrag,
       adresse: editedData.adresse || "",
