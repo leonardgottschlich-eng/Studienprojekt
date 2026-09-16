@@ -1,5 +1,16 @@
+import { useState } from "react";
 import MandantAvatar from "./MandantAvatar";
 import StatTile from "./StatTile";
+import { belegStats, mandantenNachAufwand } from "../lib/stats";
+
+/** Kleines Zahlen-Etikett je Belegzustand, z. B. "3 zu erfassen". */
+function Zaehler({ wert, label, farbe, hintergrund }) {
+  return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 20, background: wert ? hintergrund : "#f6f6f4", color: wert ? farbe : "#b6bcc4", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 12, fontWeight: 700 }}>{wert}</span>{label}
+      </span>
+  );
+}
 
 const begruessung = () => {
   const stunde = new Date().getHours();
@@ -13,15 +24,20 @@ const begruessung = () => {
  * alle Mandanten, den Scanner-Eingang und die offenen Belege.
  */
 export default function DashboardBerater({ user, mandanten = [], allDocs = {}, scanInboxCount = 0, zuordnungUnbekannt, isMobile, onSelectMandant, onScannerEingang }) {
-  const belegeVon = (m) => allDocs[m.id] || [];
-  const offeneVon = (m) => belegeVon(m).filter((d) => d.status === "ausstehend").length;
+  const [suche, setSuche] = useState("");
 
+  const belegeVon = (m) => allDocs[m.id] || [];
   const gesamt     = mandanten.reduce((summe, m) => summe + belegeVon(m).length, 0);
-  const ausstehend = mandanten.reduce((summe, m) => summe + offeneVon(m), 0);
+  const ausstehend = mandanten.reduce((summe, m) => summe + belegStats(belegeVon(m)).ausstehend, 0);
   const vorname    = (user?.name || "").split(" ")[0];
 
-  // Mandanten mit offenen Belegen zuerst
-  const sortiert = [...mandanten].sort((a, b) => offeneVon(b) - offeneVon(a) || a.name.localeCompare(b.name, "de"));
+  // Nach Arbeitsaufwand sortiert: die meisten unerledigten Belege zuerst.
+  // "Unerledigt" zählt auch Belege in Prüfung mit, nicht nur die noch
+  // nicht erfassten – siehe src/lib/stats.js.
+  const sortiert = mandantenNachAufwand(mandanten, allDocs).filter(({ mandant }) =>
+      mandant.name.toLowerCase().includes(suche.toLowerCase()) ||
+      mandant.nr.toLowerCase().includes(suche.toLowerCase())
+  );
 
   return (
       <>
@@ -69,17 +85,23 @@ export default function DashboardBerater({ user, mandanten = [], allDocs = {}, s
 
         {/* Mandantenübersicht */}
         <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e8e4dc", overflow: "hidden" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid #f0ece4" }}>
-            <h2 style={{ fontSize: 14, fontWeight: 600, color: "#0b2e44" }}>Mandanten</h2>
-            <span style={{ fontSize: 11, color: "#9ca3af" }}>Mandant wählen, um dessen Belege zu öffnen</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 20px", borderBottom: "1px solid #f0ece4" }}>
+            <div style={{ minWidth: 0 }}>
+              <h2 style={{ fontSize: 14, fontWeight: 600, color: "#0b2e44" }}>
+                Mandanten
+                <span style={{ marginLeft: 6, background: "#f3f4f6", color: "#6b7280", fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 9 }}>{sortiert.length}</span>
+              </h2>
+              {!isMobile && <span style={{ fontSize: 11, color: "#9ca3af" }}>Mandant wählen, um dessen Belege zu öffnen</span>}
+            </div>
+            <input type="text" placeholder="Mandant suchen…" value={suche} onChange={(e) => setSuche(e.target.value)}
+                   style={{ padding: "6px 12px", border: "1px solid #e5e7eb", borderRadius: 7, fontSize: 12, color: "#374151", background: "#f9fafb", width: 175, maxWidth: "50%", outline: "none", fontFamily: "inherit" }} />
           </div>
 
           {sortiert.length === 0 ? (
               <div style={{ padding: "36px 20px", textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
-                Keine Mandanten vorhanden.
+                {mandanten.length === 0 ? "Keine Mandanten vorhanden." : "Kein Mandant gefunden."}
               </div>
-          ) : sortiert.map((m, i) => {
-            const offen = offeneVon(m);
+          ) : sortiert.map(({ mandant: m, stats }, i) => {
             return (
                 <div key={m.id} onClick={() => onSelectMandant?.(m)}
                      style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", borderBottom: i < sortiert.length - 1 ? "1px solid #f9f7f3" : "none", cursor: "pointer", transition: "background .12s" }}
@@ -90,13 +112,16 @@ export default function DashboardBerater({ user, mandanten = [], allDocs = {}, s
                     <div style={{ fontSize: 12.5, fontWeight: 500, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
                     <div style={{ fontSize: 10.5, color: "#9ca3af" }}>{m.nr}</div>
                   </div>
-                  <span style={{ fontSize: 11.5, color: "#6b7280" }}>
-                    {belegeVon(m).length} Beleg{belegeVon(m).length !== 1 ? "e" : ""}
-                  </span>
-                  {offen > 0 && (
-                      <span style={{ background: "#fef3c7", color: "#b45309", fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 10, whiteSpace: "nowrap" }}>
-                        {offen} offen
+                  {isMobile ? (
+                      <span style={{ background: stats.unerledigt ? "#fef3c7" : "#f6f6f4", color: stats.unerledigt ? "#b45309" : "#b6bcc4", fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 10, whiteSpace: "nowrap" }}>
+                        {stats.unerledigt} offen
                       </span>
+                  ) : (
+                      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                        <Zaehler wert={stats.ausstehend}    label="zu erfassen" farbe="#b45309" hintergrund="#fef3c7" />
+                        <Zaehler wert={stats.inBearbeitung} label="in Prüfung"  farbe="#1d4ed8" hintergrund="#dbeafe" />
+                        <Zaehler wert={stats.analysiert}    label="erledigt"    farbe="#16a34a" hintergrund="#dcfce7" />
+                      </div>
                   )}
                   <i className="bi bi-chevron-right" style={{ fontSize: 11, color: "#d1d5db" }} />
                 </div>

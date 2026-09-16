@@ -2,6 +2,7 @@ import FileIcon from "./FileIcon";
 import StatusBadge from "./StatusBadge";
 import KategorieChips from "./KategorieChips";
 import StatTile from "./StatTile";
+import { belegStats } from "../lib/stats";
 
 const begruessung = () => {
   const stunde = new Date().getHours();
@@ -15,11 +16,7 @@ const begruessung = () => {
  * einen Beleg einzureichen und die zuletzt eingegangenen Dokumente.
  */
 export default function DashboardMandant({ user, mandant, docs = [], isMobile, onOpenDoc, onZurBelegliste, onUpload, onScan }) {
-  const stats = {
-    total:      docs.length,
-    analysiert: docs.filter((d) => d.status === "analysiert").length,
-    ausstehend: docs.filter((d) => d.status === "ausstehend").length,
-  };
+  const stats = belegStats(docs);
   const zuletzt = docs.slice(0, 5);
   const vorname = (user?.name || "").split(" ")[0];
 

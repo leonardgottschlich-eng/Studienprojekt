@@ -600,7 +600,6 @@ export default function App({ user, onLogout }) {
 
         {/* Bottom Nav */}
         <BottomNav activePage={aktiveSeite} onNavigate={navigiere} />
-        <BottomNav view={view} onNavigate={setView} />
 
         {/* Toast */}
         {notification && (
