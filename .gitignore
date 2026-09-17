@@ -23,6 +23,10 @@ dist-ssr
 *.sln
 *.sw?
 
+# Hilfsdateien von pdf.js – werden aus node_modules kopiert
+# (npm run pdfjs:assets, laeuft auch nach npm install)
+public/pdfjs
+
 # Lokale Dev-Zertifikate (private Schluessel nie committen)
 certs/*
 !certs/README.md

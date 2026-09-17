@@ -3,7 +3,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 
 import { MANDANTEN, DOCS_BY_MANDANT } from "./data/mockData";
 import { apiFetch, userToMandant, documentToDoc, updatePayload, dateiZuDataUrl, neuerBelegPayload } from "./api";
-import { filterBelege, trefferFeld, vorhandeneKategorien, LEERER_FILTER } from "./utils/belegFilter";
+import { filterBelege, vorhandeneKategorien, LEERER_FILTER } from "./utils/belegFilter";
 import { kategorienVon, bereinigeKategorien } from "./data/kategorien";
 import { lokalFetch } from "./localServer";
 import { ladeEinstellungen, speichereEinstellungen, ladeLetztenMandanten, merkeMandanten, ladeLetzteSeite, merkeSeite } from "./settings";
@@ -18,6 +18,7 @@ import DocumentScanModal from "./components/DocumentScanModal";
 import DocDetailModal from "./components/DocDetailModal";
 import ScannerInbox from "./components/ScannerInbox";
 import BelegSuche from "./components/BelegSuche";
+import BelegListe, { SPALTEN } from "./components/BelegListe";
 import SettingsPage from "./components/SettingsPage";
 import KategorieChips from "./components/KategorieChips";
 import DashboardBerater from "./components/DashboardBerater";
@@ -61,6 +62,8 @@ export default function App({ user, onLogout }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile]       = useState(window.innerWidth <= 900);
   const [selectedDoc, setSelectedDoc] = useState(null);
+  // Über den Stift geöffnete Belege starten gleich im Bearbeitungsmodus
+  const [bearbeitenDirekt, setBearbeitenDirekt] = useState(false);
   const [scanInbox, setScanInbox]     = useState([]);
   const fileInputRef = useRef(null);
 
@@ -258,13 +261,12 @@ export default function App({ user, onLogout }) {
     loadServerDocs(currentMandant);
   }, [currentMandant]);
 
-  // Scanner-Eingang abfragen (alle 10 s) – automatisch zugeordnete Scans
-  // erscheinen dabei über loadServerDocs direkt in der Belegliste.
-  // Der Scanner gehört zur Kanzlei, Mandanten fragen ihn nicht ab.
-  useEffect(() => {
-    if (istMandant) return;
-
-    // Zwei Quellen: der lokale Scan-Ordner und der freigegebene Google-Drive-Ordner
+  // Scanner-Eingang abfragen – zwei Quellen: der lokale Scan-Ordner und der
+  // freigegebene Google-Drive-Ordner.
+  //
+  // Ein angemeldeter Mandant sieht nur die eigenen Scans (der Server filtert
+  // danach); der Drive-Ordner gehört zum Kanzlei-Scanner und bleibt außen vor.
+  const fetchInbox = useCallback(async () => {
     const holeListe = async (pfad) => {
       try {
         const res = await lokalFetch(pfad);
@@ -274,17 +276,20 @@ export default function App({ user, onLogout }) {
       } catch { return []; }
     };
 
-    const fetchInbox = async () => {
-      const [lokal, drive] = await Promise.all([
-        holeListe("/api/scan/inbox"),
-        holeListe("/api/drive/inbox"),
-      ]);
-      setScanInbox([
-        ...lokal.map((f) => ({ ...f, quelle: "lokal" })),
-        ...drive,
-      ]);
-    };
+    const nurEigene = istMandant ? `?mandantNr=${encodeURIComponent(currentMandant.nr)}` : "";
+    const [lokal, drive] = await Promise.all([
+      holeListe(`/api/scan/inbox${nurEigene}`),
+      istMandant ? [] : holeListe("/api/drive/inbox"),
+    ]);
+    setScanInbox([
+      ...lokal.map((f) => ({ ...f, quelle: "lokal" })),
+      ...drive,
+    ]);
+  }, [istMandant, currentMandant.nr]);
 
+  // Regelmäßig nachsehen (alle 10 s) – automatisch zugeordnete Scans
+  // erscheinen dabei über loadServerDocs direkt in der Belegliste.
+  useEffect(() => {
     fetchInbox();
     if (!einstellungen.autoAktualisieren) return;
     const timer = setInterval(() => {
@@ -294,6 +299,32 @@ export default function App({ user, onLogout }) {
     }, Math.max(5, einstellungen.intervallSekunden) * 1000);
     return () => clearInterval(timer);
   }, [currentMandant, istMandant,einstellungen.autoAktualisieren, einstellungen.intervallSekunden]);
+
+  /**
+   * Handy-Scan in den Scanner-Eingang legen, statt ihn sofort hochzuladen.
+   * Dort bekommt er wie jeder Scan vom Belegscanner einen sprechenden Namen und
+   * den Mandanten; erst beim Speichern geht er über assignScan ins Backend.
+   */
+  const scanInEingang = async (file) => {
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      // Der gerade gewählte Mandant geht als Vorschlag mit – im Eingang ist er
+      // dadurch vorausgewählt und muss nur noch bestätigt werden.
+      const res = await lokalFetch(
+          `/api/scan/upload?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}`,
+          { method: "POST", body: formData }
+      );
+      if (!res.ok) throw new Error();
+      await fetchInbox();
+      // Der Eingang steht auf der Belegseite – dorthin wechseln, sonst wäre der
+      // eben gemachte Scan nicht zu sehen.
+      navigiere("belege");
+      showNotification("Scan im Scanner-Eingang – bitte benennen und zuordnen");
+    } catch {
+      showNotification("Scan-Server nicht erreichbar – Scan wurde nicht gespeichert.", "error");
+    }
+  };
 
   /**
    * Scan benennen, einem Mandanten zuordnen und als Beleg ins Backend übernehmen.
@@ -355,6 +386,44 @@ export default function App({ user, onLogout }) {
           : `Bild zugeordnet: ${mandant.name} – ${ausDrive ? "in Drive verschoben" : "bleibt lokal"}, das Backend nimmt nur PDF`);
     } catch (e) {
       showNotification(`Zuordnung fehlgeschlagen: ${e.message}`, "error");
+    }
+  };
+
+  /**
+   * Belegnamen ändern. Wohin die Änderung geht, hängt davon ab, wo der Beleg
+   * liegt: in der Datenbank (PATCH) oder als Datei im Mandantenordner des
+   * Scan-Servers. Die Dateiendung bleibt in jedem Fall erhalten.
+   */
+  const renameDoc = async (doc, neuerBasisName) => {
+    const endung = doc.name.includes(".") ? doc.name.slice(doc.name.lastIndexOf(".")) : "";
+    const ziel   = neuerBasisName.trim().replace(/[\\/:*?"<>|]/g, "") + endung;
+    if (ziel === endung || ziel === doc.name) return;
+
+    try {
+      if (doc.backendDoc) {
+        await apiFetch(`/documents/${doc.apiId}`, {
+          method: "PATCH",
+          body: { original_file_name: ziel },
+        });
+      } else if (doc.serverFile) {
+        const res = await lokalFetch("/api/belege/rename", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mandantNr: currentMandant.nr, mandantName: currentMandant.name,
+            fileName: doc.name, newName: ziel,
+          }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Scan-Server nicht erreichbar");
+      }
+      // Demo-Belege ohne Herkunft werden nur in der Anzeige umbenannt
+      setAllDocs((prev) => ({
+        ...prev,
+        [currentMandant.id]: (prev[currentMandant.id] || []).map((d) => d.id === doc.id ? { ...d, name: ziel } : d),
+      }));
+      showNotification(`Umbenannt in ${ziel}`);
+    } catch (e) {
+      showNotification(`Umbenennen fehlgeschlagen: ${e.message}`, "error");
     }
   };
 
@@ -461,6 +530,10 @@ export default function App({ user, onLogout }) {
     ausstehend: docs.filter((d) => d.status === "ausstehend").length,
   };
 
+  // Der Scanner-Eingang lässt sich in den Einstellungen ausblenden. Ist er aus,
+  // geht ein Scan direkt hoch, sonst wartet er dort auf Namen und Zuordnung.
+  const zeigeScannerEingang = einstellungen.scannerEingangAnzeigen;
+
   return (
       <div style={{ display: "flex", minHeight: "100vh", width: "100%", fontFamily: "'Inter', 'Segoe UI', sans-serif", background: "#f8f7f4" }}>
         <style>{`
@@ -492,14 +565,22 @@ export default function App({ user, onLogout }) {
           .bottom-nav    { display: flex !important; }
         }
         @media (max-width: 600px) {
-          .stats-grid    { grid-template-columns: 1fr 1fr !important; }
+          /* Am Telefon stehen die Kennzahlen untereinander – nebeneinander
+             werden Beschriftung und Zahl zu eng */
+          .stats-grid    { grid-template-columns: 1fr !important; }
           .col-hide      { display: none !important; }
         }
       `}</style>
 
         {/* Modals */}
-        {cameraOpen && <DocumentScanModal onClose={() => setCameraOpen(false)} onCapture={(file) => uploadToLocal([file])} />}
-        {selectedDoc && <DocDetailModal doc={selectedDoc} mandant={currentMandant} onClose={() => setSelectedDoc(null)} onConfirm={(ed, kats) => handleConfirm(selectedDoc.id, ed, kats)} onDiscard={() => handleDiscard(selectedDoc)} />}
+        {cameraOpen && <DocumentScanModal onClose={() => setCameraOpen(false)}
+                                          onCapture={(file) => zeigeScannerEingang ? scanInEingang(file) : uploadToLocal([file])} />}
+        {selectedDoc && <DocDetailModal key={selectedDoc.id} doc={selectedDoc} mandant={currentMandant} isMobile={isMobile}
+                                        startImBearbeiten={bearbeitenDirekt}
+                                        onClose={() => { setSelectedDoc(null); setBearbeitenDirekt(false); }}
+                                        onRename={renameDoc}
+                                        onConfirm={(ed, kats) => handleConfirm(selectedDoc.id, ed, kats)}
+                                        onDiscard={() => handleDiscard(selectedDoc)} />}
 
         {/* Sidebar overlay */}
         {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
@@ -530,8 +611,6 @@ export default function App({ user, onLogout }) {
                     isMobile={isMobile}
                     onOpenDoc={setSelectedDoc}
                     onZurBelegliste={() => setView("belege")}
-                    onUpload={() => fileInputRef.current?.click()}
-                    onScan={() => setCameraOpen(true)}
                 />
               ) : (
                 <DashboardBerater
@@ -564,7 +643,7 @@ export default function App({ user, onLogout }) {
 
             {/* Scanner-Eingang: unzugeordnete Scans benennen und zuordnen.
                 Nur für Kanzlei-Rollen und nur, wenn in den Einstellungen gewünscht. */}
-            {!istMandant && einstellungen.scannerEingangAnzeigen && (
+            {zeigeScannerEingang && (
                 <ScannerInbox files={scanInbox} mandanten={mandanten} onAssign={assignScan} />
             )}
 
@@ -600,59 +679,36 @@ export default function App({ user, onLogout }) {
             {/* Doc Table */}
             <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e8e4dc", overflow: "hidden" }}>
               <BelegSuche filter={filter} onChange={setFilter} kategorien={vorhandeneKategorien(docs)} onExport={exportiereBelege}
-                          anzahl={filteredDocs.length} gesamt={docs.length} />
-              <div style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 60px", padding: "8px 20px", background: "#fafaf8", borderBottom: "1px solid #f0ece4" }}>
-                {["DATEI", "DATUM", "KATEGORIE", "BETRAG", "STATUS", "KI"].map((h) => (
-                    <span key={h} style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", letterSpacing: ".06em" }}>{h}</span>
-                ))}
-              </div>
-              {filteredDocs.length === 0 ? (
-                  <div style={{ padding: "40px 20px", textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
-                    {docs.length === 0 ? "Noch keine Belege für diesen Mandanten." : (
-                        <>
-                          Kein Beleg passt zu Suche und Zeitraum.
-                          <button onClick={() => setFilter({ ...LEERER_FILTER })}
-                                  style={{ display: "block", margin: "10px auto 0", background: "none", border: "none", color: "#18537a", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-                            Filter zurücksetzen
-                          </button>
-                        </>
-                    )}
+                          anzahl={filteredDocs.length} gesamt={docs.length} isMobile={isMobile} />
+              {/* Spaltenköpfe nur am Schreibtisch – am Handy stehen die Angaben
+                  je Beleg untereinander statt in sechs Spalten */}
+              {!isMobile && (
+                  <div style={{ display: "grid", gridTemplateColumns: SPALTEN, padding: "8px 20px", background: "#fafaf8", borderBottom: "1px solid #f0ece4" }}>
+                    {["DATEI", "DATUM", "KATEGORIE", "BETRAG", "STATUS", "KI"].map((h) => (
+                        <span key={h} style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", letterSpacing: ".06em" }}>{h}</span>
+                    ))}
                   </div>
-              ) : filteredDocs.map((doc, i) => {
-                const conf = doc.confidence;
-                const treffer = trefferFeld(doc, filter.query);
-                const confColor = !conf ? "#d1d5db" : conf >= 85 ? "#16a34a" : conf >= 65 ? "#d97706" : "#dc2626";
-                return (
-                    <div key={doc.id} onClick={() => setSelectedDoc(doc)}
-                         style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr 1fr 60px", padding: "12px 20px", borderBottom: i < filteredDocs.length - 1 ? "1px solid #f9f7f3" : "none", alignItems: "center", cursor: "pointer", transition: "background .12s" }}
-                         onMouseEnter={e => (e.currentTarget.style.background = "#fafaf8")}
-                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <FileIcon type={doc.type} />
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 12.5, fontWeight: 500, color: "#111827", marginBottom: 1 }}>{doc.name}</div>
-                          <div style={{ fontSize: 10.5, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {doc.size}
-                            {/* Zeigt an, wo der Suchbegriff steckt, wenn nicht im Dateinamen */}
-                            {treffer && <span style={{ color: "#b45309" }}> · {treffer.label}: {treffer.wert}</span>}
-                          </div>
-                        </div>
-                      </div>
-                      <span style={{ fontSize: 12, color: "#6b7280" }}>{doc.uploadedAt}</span>
-                      <KategorieChips doc={doc} />
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{doc.amount}</span>
-                      <StatusBadge status={doc.status} />
-                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        {conf ? (<>
-                          <div style={{ flex: 1, height: 4, background: "#f0ece4", borderRadius: 4, overflow: "hidden" }}>
-                            <div style={{ height: "100%", width: `${conf}%`, background: confColor, borderRadius: 4 }} />
-                          </div>
-                          <span style={{ fontSize: 9.5, fontWeight: 700, color: confColor, minWidth: 24 }}>{conf}%</span>
-                        </>) : <span style={{ fontSize: 10, color: "#d1d5db" }}>—</span>}
-                      </div>
+              )}
+              <BelegListe
+                  docs={filteredDocs}
+                  isMobile={isMobile}
+                  query={filter.query}
+                  onOpen={(doc) => { setBearbeitenDirekt(false); setSelectedDoc(doc); }}
+                  onEdit={(doc) => { setBearbeitenDirekt(true); setSelectedDoc(doc); }}
+                  leerAnzeige={
+                    <div style={{ padding: "40px 20px", textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
+                      {docs.length === 0 ? "Noch keine Belege für diesen Mandanten." : (
+                          <>
+                            Kein Beleg passt zu Suche und Zeitraum.
+                            <button onClick={() => setFilter({ ...LEERER_FILTER })}
+                                    style={{ display: "block", margin: "10px auto 0", background: "none", border: "none", color: "#18537a", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                              Filter zurücksetzen
+                            </button>
+                          </>
+                      )}
                     </div>
-                );
-              })}
+                  }
+              />
             </div>
             </>)}
           </div>

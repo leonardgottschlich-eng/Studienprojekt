@@ -72,7 +72,7 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
             <div style={{ height: 1, background: "rgba(255,255,255,.06)", margin: "0 12px 16px" }} />
 
             {/* Nav */}
-            <nav style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 10px" }}>
+            <nav style={{ flex: 1, padding: "0 10px" }}>
                 {[
                     { icon: "bi-border-all", label: "Dashboard",     seite: "dashboard" },
                     { icon: "bi-folder",     label: "Belege",        seite: "belege" },
@@ -90,7 +90,7 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
             </nav>
 
             {/* User */}
-            <div style={{ padding: "20px 40px", borderTop: "1px solid rgba(255,255,255,.06)", display: "flex", alignItems: "center", gap: 9 }}>
+            <div style={{ padding: "12px 20px", borderTop: "1px solid rgba(255,255,255,.06)", display: "flex", alignItems: "center", gap: 9 }}>
                 <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#18537a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fd8f19", flexShrink: 0 }}>
                     {(user?.name || "??").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}
                 </div>

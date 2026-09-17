@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { scanZuPdfDatei, dataUrlZuBytes } from '../lib/jpegZuPdf';
 
 export default function DocumentScanModal({ onClose, onCapture }) {
   const videoRef      = useRef(null);
@@ -33,6 +34,15 @@ export default function DocumentScanModal({ onClose, onCapture }) {
   }, []);
 
   const startCamera = async () => {
+    // Die Kamera gibt der Browser nur in einem sicheren Kontext frei: über
+    // HTTPS oder auf localhost. Über die Netzwerkadresse (http://192.168.…)
+    // fehlt navigator.mediaDevices komplett – dann hilft keine Berechtigung.
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert("Die Kamera ist nur über HTTPS oder auf localhost verfügbar.\n\n"
+          + "Starte den Dev-Server ohne NO_SSL=1, dann läuft die Seite über https://.");
+      onClose();
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -233,12 +243,19 @@ export default function DocumentScanModal({ onClose, onCapture }) {
     startDetection();
   };
 
+  // Der Scan geht als PDF weiter: So nimmt ihn das Backend an und er landet
+  // wie jeder andere Beleg in der Belegliste, nicht nur im lokalen Archiv.
   const confirm = () => {
-    const src = finalImg;
-    const byteString = atob(src.split(",")[1]);
-    const ia = new Uint8Array(byteString.length);
-    for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-    const file = new File([ia], `Scan_${Date.now()}.jpg`, { type: "image/jpeg" });
+    const name = `Scan_${Date.now()}`;
+    let file;
+    try {
+      file = scanZuPdfDatei(finalImg, `${name}.pdf`);
+    } catch (e) {
+      // Sollte die Umwandlung fehlschlagen, geht der Scan als Bild weiter,
+      // statt verloren zu sein.
+      console.warn("PDF-Umwandlung fehlgeschlagen:", e);
+      file = new File([dataUrlZuBytes(finalImg)], `${name}.jpg`, { type: "image/jpeg" });
+    }
     stopAll();
     onCapture(file);
     onClose();

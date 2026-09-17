@@ -12,20 +12,14 @@ const begruessung = () => {
 };
 
 /**
- * Startseite für Mandanten: eigene Belege im Überblick, die beiden Wege
- * einen Beleg einzureichen und die zuletzt eingegangenen Dokumente.
+ * Startseite für Mandanten: eigene Belege im Überblick und die zuletzt
+ * eingegangenen Dokumente. Hochladen und Scannen laufen über die Belegseite
+ * bzw. das Kamera-Symbol oben rechts.
  */
-export default function DashboardMandant({ user, mandant, docs = [], isMobile, onOpenDoc, onZurBelegliste, onUpload, onScan }) {
+export default function DashboardMandant({ user, mandant, docs = [], isMobile, onOpenDoc, onZurBelegliste }) {
   const stats = belegStats(docs);
   const zuletzt = docs.slice(0, 5);
   const vorname = (user?.name || "").split(" ")[0];
-
-  const aktion = {
-    display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 200,
-    background: "#fff", border: "1px solid #e8e4dc", borderRadius: 12,
-    padding: "16px 18px", cursor: "pointer", textAlign: "left", fontFamily: "inherit",
-    transition: "border-color .15s, transform .15s",
-  };
 
   return (
       <>
@@ -48,28 +42,6 @@ export default function DashboardMandant({ user, mandant, docs = [], isMobile, o
           <StatTile label="Meine Belege" value={stats.total}      icon="bi-file-text"       accent="#18537a" />
           <StatTile label="Analysiert"   value={stats.analysiert} icon="bi-check2"          accent="#16a34a" />
           <StatTile label="Ausstehend"   value={stats.ausstehend} icon="bi-hourglass-split" accent="#d97706" />
-        </div>
-
-        {/* Beleg einreichen */}
-        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 22 }}>
-          <button onClick={onUpload} style={aktion}
-                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#18537a")}
-                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#e8e4dc")}>
-            <i className="bi bi-upload" style={{ fontSize: 20, color: "#18537a" }} />
-            <span>
-              <span style={{ display: "block", fontSize: 13.5, fontWeight: 600, color: "#0b2e44" }}>Beleg hochladen</span>
-              <span style={{ fontSize: 11.5, color: "#9ca3af" }}>PDF oder Bild vom Gerät wählen</span>
-            </span>
-          </button>
-          <button onClick={onScan} style={aktion}
-                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#fd8f19")}
-                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#e8e4dc")}>
-            <i className="bi bi-camera" style={{ fontSize: 20, color: "#fd8f19" }} />
-            <span>
-              <span style={{ display: "block", fontSize: 13.5, fontWeight: 600, color: "#0b2e44" }}>Mit Kamera scannen</span>
-              <span style={{ fontSize: 11.5, color: "#9ca3af" }}>Beleg direkt abfotografieren</span>
-            </span>
-          </button>
         </div>
 
         {/* Zuletzt eingegangen */}

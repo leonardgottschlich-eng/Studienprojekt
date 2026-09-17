@@ -46,13 +46,70 @@ function ConfidenceRing({ value }) {
   );
 }
 
+/**
+ * PDF-Seiten selbst zu Bildern zeichnen.
+ *
+ * Der eingebaute PDF-Betrachter (vor allem der von Safari) zeigt die Seite in
+ * seiner eigenen Zoomstufe und links oben ausgerichtet – der Beleg steht dann
+ * angeschnitten und nicht mittig. Als Bild lässt sich die Seite dagegen exakt
+ * auf die Breite legen und zentrieren, und zwar auf jedem Gerät gleich.
+ */
+const MAX_SEITEN = 5;
+
+async function pdfZuBildern(blob) {
+  // Bewusst der "legacy"-Build: Er ist für ältere Browser übersetzt und läuft
+  // auch in Safari-Versionen, in denen der normale Build aussteigt.
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  // Der Worker wird von Vite als eigene Datei ausgeliefert
+  const worker = await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url");
+  pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+
+  // Aufgeräumt wird über den Ladevorgang – das Dokument selbst hat kein
+  // destroy() (mehr).
+  //
+  // Die drei Pfade sind wichtig: pdf.js lädt Bilddecoder (JBIG2, JPEG 2000),
+  // Farbprofile und Standardschriften erst bei Bedarf nach. Ohne sie bleibt
+  // eine gescannte Seite stillschweigend weiß. Die Dateien liegen unter
+  // public/pdfjs (siehe scripts/copy-pdfjs-assets.mjs).
+  const ladevorgang = pdfjs.getDocument({
+    data: await blob.arrayBuffer(),
+    wasmUrl: "/pdfjs/wasm/",
+    iccUrl: "/pdfjs/iccs/",
+    standardFontDataUrl: "/pdfjs/standard_fonts/",
+  });
+  const datei = await ladevorgang.promise;
+  const bilder = [];
+  try {
+    for (let nr = 1; nr <= Math.min(datei.numPages, MAX_SEITEN); nr++) {
+      const seite = await datei.getPage(nr);
+      // Doppelte Auflösung, damit die Schrift auf dem Beleg lesbar bleibt
+      const ansicht = seite.getViewport({ scale: 2 });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(ansicht.width);
+      canvas.height = Math.round(ansicht.height);
+      await seite.render({ canvas, viewport: ansicht }).promise;
+      bilder.push(canvas.toDataURL("image/jpeg", 0.9));
+    }
+  } finally {
+    // Ein Fehler beim Aufräumen darf fertige Seiten nicht verwerfen
+    try { await ladevorgang.destroy(); } catch { /* nicht weiter schlimm */ }
+  }
+  return bilder;
+}
+
 /* ── Echte Dokumentvorschau (Backend-PDF oder Datei vom lokalen Server) ── */
-function ServerFilePreview({ doc, mandant }) {
+function ServerFilePreview({ doc, mandant, isMobile }) {
   const [fileUrl, setFileUrl] = useState(null);
+  const [seiten, setSeiten]   = useState(null);   // gerenderte PDF-Seiten
   const [error, setError]     = useState(false);
+  // Grund, falls das Zeichnen scheitert – wird unter der Rückfallansicht
+  // angezeigt, damit man nicht raten muss, woran es liegt
+  const [zeichenFehler, setZeichenFehler] = useState(null);
 
   useEffect(() => {
     let objectUrl = null;
+    let abgebrochen = false;
+
     const load = async () => {
       try {
         // fetch statt <img src>, weil beide Server den Auth-Header verlangen
@@ -62,15 +119,34 @@ function ServerFilePreview({ doc, mandant }) {
               })
             : await lokalFetch(`/api/belege/file?mandantNr=${encodeURIComponent(mandant.nr)}&mandantName=${encodeURIComponent(mandant.name)}&name=${encodeURIComponent(doc.name)}`);
         if (!res.ok) throw new Error();
-        objectUrl = URL.createObjectURL(await res.blob());
+        const blob = await res.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (abgebrochen) return;
         setFileUrl(objectUrl);
+
+        if (doc.type === "pdf") {
+          try {
+            const bilder = await pdfZuBildern(blob);
+            if (abgebrochen) return;
+            if (bilder.length) setSeiten(bilder);
+            else setZeichenFehler("keine Seiten gefunden");
+          } catch (e) {
+            // Klappt das Zeichnen nicht, bleibt die eingebettete Ansicht
+            console.warn("PDF konnte nicht gezeichnet werden:", e);
+            if (!abgebrochen) setZeichenFehler(e?.message || String(e));
+          }
+        }
       } catch {
-        setError(true);
+        if (!abgebrochen) setError(true);
       }
     };
+
     load();
-    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [doc.name, doc.apiId, doc.backendDoc, mandant.nr, mandant.name]);
+    return () => {
+      abgebrochen = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [doc.name, doc.apiId, doc.backendDoc, doc.type, mandant.nr, mandant.name]);
 
   if (error) {
     return (
@@ -83,11 +159,43 @@ function ServerFilePreview({ doc, mandant }) {
   if (!fileUrl) {
     return <div style={{ padding: 40, textAlign: "center", color: "#9ca3af", fontSize: 13, animation: "pulse 1.2s infinite" }}>Lade Dokument…</div>;
   }
-  return doc.type === "pdf" ? (
-      <iframe src={fileUrl} title={doc.name} style={{ width: "100%", height: "100%", minHeight: 500, border: "none", borderRadius: 4, background: "#fff", boxShadow: "0 2px 12px rgba(0,0,0,.08)" }} />
-  ) : (
-      <img src={fileUrl} alt={doc.name} style={{ width: "100%", borderRadius: 4, boxShadow: "0 2px 12px rgba(0,0,0,.08)" }} />
-  );
+
+  const bildStil = {
+    display: "block", width: "100%", maxWidth: 620, margin: "0 auto",
+    borderRadius: 4, background: "#fff", boxShadow: "0 2px 12px rgba(0,0,0,.08)",
+  };
+
+  if (doc.type === "pdf") {
+    // Gezeichnete Seiten – volle Breite, mittig, nichts abgeschnitten
+    if (seiten) {
+      return (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {seiten.map((bild, i) => (
+                <img key={i} src={bild} alt={`${doc.name} – Seite ${i + 1}`} style={bildStil} />
+            ))}
+          </div>
+      );
+    }
+
+    // Noch am Zeichnen
+    if (!zeichenFehler) {
+      return <div style={{ padding: 40, textAlign: "center", color: "#9ca3af", fontSize: 13, animation: "pulse 1.2s infinite" }}>Beleg wird aufbereitet…</div>;
+    }
+
+    // Rückfallebene: die Direktanzeige des Browsers. Sie richtet die Seite
+    // nach eigenem Gutdünken aus – deshalb steht darunter, woran es lag.
+    return (
+        <>
+          <iframe src={`${fileUrl}#view=FitH&pagemode=none`} title={doc.name}
+                  style={{ display: "block", width: "100%", height: isMobile ? "65vh" : "100%", minHeight: isMobile ? 380 : 500, border: "none", borderRadius: 4, background: "#fff", boxShadow: "0 2px 12px rgba(0,0,0,.08)" }} />
+          <p style={{ fontSize: 10.5, color: "#b45309", marginTop: 8, lineHeight: 1.45 }}>
+            Direktanzeige des Browsers – die Seite ließ sich nicht zeichnen ({zeichenFehler}).
+          </p>
+        </>
+    );
+  }
+
+  return <img src={fileUrl} alt={doc.name} style={bildStil} />;
 }
 
 /* ── Scan Preview ── */
@@ -251,8 +359,16 @@ function berechneAnrechnung(positionen, included) {
   };
 }
 
-export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDiscard }) {
-  const [editMode, setEditMode] = useState(false);
+// "Tankbeleg.pdf" → ["Tankbeleg", ".pdf"]
+const teileName = (name) => {
+  const i = name.lastIndexOf(".");
+  return i > 0 ? [name.slice(0, i), name.slice(i)] : [name, ""];
+};
+
+export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeiten, onClose, onRename, onConfirm, onDiscard }) {
+  const [editMode, setEditMode] = useState(!!startImBearbeiten);
+  // Dateiname ohne Endung – die Endung bleibt beim Umbenennen unverändert
+  const [nameEntwurf, setNameEntwurf] = useState(() => teileName(doc.name)[0]);
   const [edited, setEdited] = useState({ ...LEERE_DATEN, ...doc.extractedData });
   const [included, setIncluded] = useState(
       () => (doc.extractedData?.positionen ?? []).map(p => p.angerechnet !== false)
@@ -317,6 +433,17 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
     };
   };
 
+  // Speichern: erst der Name (falls geändert), dann die Belegdaten – so bleibt
+  // der neue Name erhalten, wenn das Bestätigen die Liste aktualisiert.
+  const speichereAlles = async () => {
+    const neu = nameEntwurf.trim();
+    if (neu && neu !== teileName(doc.name)[0]) {
+      await onRename?.(doc, neu);
+    }
+    setEditMode(false);
+    onConfirm(withFlags(edited), kategorien);
+  };
+
   const fieldStyle = {
     width: "100%", padding: "7px 10px", border: "1px solid #e5e7eb",
     borderRadius: 7, fontSize: 12.5, color: "#111827", background: "#f9fafb", outline: "none",
@@ -331,35 +458,55 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
         {/* Backdrop */}
         <div style={{ position: "absolute", inset: 0, background: "rgba(11,46,68,.55)", backdropFilter: "blur(4px)" }} onClick={onClose} />
 
-        {/* Modal panel */}
-        <div style={{ position: "relative", margin: "auto", width: "min(92vw, 1080px)", maxHeight: "92vh", background: "#fff", borderRadius: 16, boxShadow: "0 24px 80px rgba(0,0,0,.22)", display: "flex", flexDirection: "column", animation: "fadeUp .25s ease", overflow: "hidden" }}>
+        {/* Modal panel – am Telefon bildschirmfüllend, sonst als Karte mittig */}
+        <div style={isMobile
+            ? { position: "relative", margin: 0, width: "100vw", height: "100dvh", maxHeight: "100dvh", background: "#fff", display: "flex", flexDirection: "column", overflow: "hidden" }
+            : { position: "relative", margin: "auto", width: "min(92vw, 1080px)", maxHeight: "92vh", background: "#fff", borderRadius: 16, boxShadow: "0 24px 80px rgba(0,0,0,.22)", display: "flex", flexDirection: "column", animation: "fadeUp .25s ease", overflow: "hidden" }}>
 
-          {/* Header */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 24px", borderBottom: "1px solid #f0ece4", flexShrink: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {/* Header – der Dateiname wird gekürzt, damit das Kreuz zum Schließen
+              bei jeder Namenslänge sichtbar bleibt */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: isMobile ? "12px 16px" : "16px 24px", borderBottom: "1px solid #f0ece4", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flex: 1 }}>
               <FileIcon type={doc.type} />
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#0b2e44" }}>{doc.name}</div>
-                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>Hochgeladen am {doc.uploadedAt} · {doc.size}</div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                {/* Im Bearbeitungsmodus ist auch der Belegname änderbar */}
+                {editMode ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <input value={nameEntwurf} onChange={(e) => setNameEntwurf(e.target.value)}
+                             placeholder="Belegname…"
+                             style={{ flex: 1, minWidth: 0, padding: "5px 9px", border: "1px solid #fd8f19", borderRadius: 7, fontSize: 14, fontWeight: 700, color: "#0b2e44", background: "#fff", outline: "none", fontFamily: "inherit" }} />
+                      <span style={{ fontSize: 12, color: "#9ca3af", flexShrink: 0 }}>{teileName(doc.name)[1]}</span>
+                    </div>
+                ) : (
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#0b2e44", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.name}</div>
+                )}
+                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span>Hochgeladen am {doc.uploadedAt} · {doc.size}</span>
+                  {/* Am Telefon unter den Namen, oben ist kein Platz mehr */}
+                  {isMobile && <StatusBadge status={doc.status} />}
+                </div>
               </div>
-              <StatusBadge status={doc.status} />
+              {!isMobile && <StatusBadge status={doc.status} />}
             </div>
-            <button onClick={onClose} style={{ background: "#f3f4f6", border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", fontSize: 16, color: "#6b7280", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <button onClick={onClose} style={{ background: "#f3f4f6", border: "none", borderRadius: 8, width: 32, height: 32, flexShrink: 0, cursor: "pointer", fontSize: 16, color: "#6b7280", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <i className="bi bi-x" />
             </button>
           </div>
 
-          {/* Body */}
-          <div style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
+          {/* Body – am Telefon untereinander: erst der Beleg, dann die Daten.
+              Gescrollt wird dann der ganze Bereich statt jeder Spalte einzeln. */}
+          <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", flex: 1, overflowY: isMobile ? "auto" : "hidden", overflowX: "hidden", minHeight: 0 }}>
 
-            {/* Left: Scan */}
-            <div style={{ width: "42%", flexShrink: 0, background: "#f5f3ef", borderRight: "1px solid #ede9e0", overflowY: "auto", padding: 20 }}>
+            {/* Originaldokument.
+                Am Telefon ein breiter Rand ringsum: Das PDF nimmt Wischgesten
+                selbst entgegen, nur daneben lässt sich die Ansicht scrollen. */}
+            <div style={{ width: isMobile ? "100%" : "42%", flexShrink: 0, background: "#f5f3ef", borderRight: isMobile ? "none" : "1px solid #ede9e0", borderBottom: isMobile ? "1px solid #ede9e0" : "none", overflowY: isMobile ? "visible" : "auto", padding: isMobile ? "16px 34px 28px" : 20 }}>
               <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", letterSpacing: ".08em", marginBottom: 12 }}>ORIGINALDOKUMENT</div>
-              {(doc.backendDoc || (doc.serverFile && mandant)) ? <ServerFilePreview doc={doc} mandant={mandant} /> : <ScanPreview doc={doc} />}
+              {(doc.backendDoc || (doc.serverFile && mandant)) ? <ServerFilePreview doc={doc} mandant={mandant} isMobile={isMobile} /> : <ScanPreview doc={doc} />}
             </div>
 
-            {/* Right: Extracted data */}
-            <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 0 }}>
+            {/* Belegdaten */}
+            <div style={{ flex: 1, minWidth: 0, overflowY: isMobile ? "visible" : "auto", padding: isMobile ? 16 : "20px 24px", display: "flex", flexDirection: "column", gap: 0 }}>
 
               {/* Confidence + header */}
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
@@ -374,8 +521,9 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
                 {doc.confidence != null && <ConfidenceRing value={doc.confidence} />}
               </div>
 
-              {/* Fields grid */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px 20px", marginBottom: 20 }}>
+              {/* Fields grid – am Telefon einspaltig, sonst wird der rechte
+                  Wert abgeschnitten */}
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? "12px" : "14px 20px", marginBottom: 20 }}>
                 <FieldRow label="Aussteller" fieldKey="aussteller" wide editMode={editMode} edited={edited} setEdited={setEdited} ed={ed} />
                 <FieldRow label="Adresse" fieldKey="adresse" wide editMode={editMode} edited={edited} setEdited={setEdited} ed={ed} />
                 <FieldRow label="USt-IdNr." fieldKey="ustIdNr" editMode={editMode} edited={edited} setEdited={setEdited} ed={ed} />
@@ -387,9 +535,9 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
 
               {/* Klassifikation – ein Beleg kann mehreren Kategorien zugeordnet sein */}
               <div style={{ marginBottom: 20 }}>
-                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                   <span style={labelStyle}>KLASSIFIKATION</span>
-                  <span style={{ fontSize: 10, color: "#9ca3af" }}>Mehrfachzuordnung möglich</span>
+                  {!isMobile && <span style={{ fontSize: 10, color: "#9ca3af" }}>Mehrfachzuordnung möglich</span>}
                 </div>
                 <div style={{ background: "#fafaf8", borderRadius: 8, border: "1px solid #f0ece4", padding: "10px 12px" }}>
                   {/* Gewählte Klassifikationen */}
@@ -574,15 +722,18 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
             </div>
           </div>
 
-          {/* Footer: Action buttons */}
-          <div style={{ flexShrink: 0, padding: "14px 24px", borderTop: "1px solid #f0ece4", background: "#fafaf8", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <div style={{ fontSize: 11, color: "#9ca3af" }}>
-              {editMode ? "✏️ Bearbeitungsmodus aktiv — Felder können geändert werden" : "Klicke auf einen Eintrag um Details anzuzeigen"}
-            </div>
-            <div style={{ display: "flex", gap: 10 }}>
+          {/* Footer: Action buttons – am Telefon ohne Hinweistext, dafür
+              füllen die Schaltflächen die Breite */}
+          <div style={{ flexShrink: 0, padding: isMobile ? "12px 16px" : "14px 24px", borderTop: "1px solid #f0ece4", background: "#fafaf8", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            {!isMobile && (
+                <div style={{ fontSize: 11, color: "#9ca3af" }}>
+                  {editMode ? "✏️ Bearbeitungsmodus aktiv — Felder können geändert werden" : "Klicke auf einen Eintrag um Details anzuzeigen"}
+                </div>
+            )}
+            <div style={{ display: "flex", gap: 10, width: isMobile ? "100%" : "auto" }}>
               {/* Löschen */}
               <button onClick={onDiscard}
-                      style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 18px", background: "#fff", border: "1px solid #fca5a5", borderRadius: 9, fontSize: 13, fontWeight: 600, color: "#dc2626", cursor: "pointer", transition: "all .15s" }}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: isMobile ? 1 : undefined, gap: 6, padding: "9px 18px", background: "#fff", border: "1px solid #fca5a5", borderRadius: 9, fontSize: 13, fontWeight: 600, color: "#dc2626", cursor: "pointer", transition: "all .15s" }}
                       onMouseEnter={e => e.currentTarget.style.background = "#fef2f2"}
                       onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
                 <i className="bi bi-trash3" /> Löschen
@@ -590,13 +741,13 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
 
               {/* Bearbeiten / Speichern */}
               {editMode ? (
-                  <button onClick={() => { setEditMode(false); onConfirm(withFlags(edited), kategorien); }}
-                          style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 18px", background: "#18537a", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
-                    <i className="bi bi-floppy" /> Änderungen speichern
+                  <button onClick={speichereAlles}
+                          style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: isMobile ? 1 : undefined, gap: 6, padding: "9px 18px", background: "#18537a", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
+                    <i className="bi bi-floppy" /> {isMobile ? "Speichern" : "Änderungen speichern"}
                   </button>
               ) : (
                   <button onClick={() => setEditMode(true)}
-                          style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 18px", background: "#fff", border: "1px solid #d1d5db", borderRadius: 9, fontSize: 13, fontWeight: 600, color: "#374151", cursor: "pointer", transition: "all .15s" }}
+                          style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: isMobile ? 1 : undefined, gap: 6, padding: "9px 18px", background: "#fff", border: "1px solid #d1d5db", borderRadius: 9, fontSize: 13, fontWeight: 600, color: "#374151", cursor: "pointer", transition: "all .15s" }}
                           onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
                           onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
                     <i className="bi bi-pencil" /> Bearbeiten
@@ -606,7 +757,7 @@ export default function DocDetailModal({ doc, mandant, onClose, onConfirm, onDis
               {/* Bestätigen */}
               {!editMode && (
                   <button onClick={() => onConfirm(withFlags(ed), kategorien)}
-                          style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 20px", background: "linear-gradient(135deg,#16a34a,#22c55e)", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer", boxShadow: "0 2px 8px rgba(22,163,74,.3)" }}>
+                          style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: isMobile ? 1 : undefined, gap: 6, padding: "9px 20px", background: "linear-gradient(135deg,#16a34a,#22c55e)", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer", boxShadow: "0 2px 8px rgba(22,163,74,.3)" }}>
                     <i className="bi bi-check2-circle" /> Bestätigen
                   </button>
               )}
