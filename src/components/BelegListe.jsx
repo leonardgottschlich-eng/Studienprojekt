@@ -42,7 +42,7 @@ export default function BelegListe({ docs, isMobile, query, onOpen, onEdit, leer
                 {treffer && <span style={{ color: "#b45309" }}> · {treffer.label}: {treffer.wert}</span>}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                <StatusBadge status={doc.status} />
+                <StatusBadge status={doc.status} kiLaeuft={doc.kiLaeuft} />
                 <KategorieChips doc={doc} max={1} />
                 <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 600, color: "#111827" }}>{doc.amount}</span>
               </div>
@@ -81,7 +81,7 @@ export default function BelegListe({ docs, isMobile, query, onOpen, onEdit, leer
           <span style={{ fontSize: 12, color: "#6b7280" }}>{doc.uploadedAt}</span>
           <KategorieChips doc={doc} />
           <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{doc.amount}</span>
-          <StatusBadge status={doc.status} />
+          <StatusBadge status={doc.status} kiLaeuft={doc.kiLaeuft} />
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             {conf ? (<>
               <div style={{ flex: 1, height: 4, background: "#f0ece4", borderRadius: 4, overflow: "hidden" }}>

@@ -17,35 +17,43 @@ funktioniert.
 
 ## Backend-Anbindung
 
-Alle Requests gehen an `/api/...` und werden vom Vite-Proxy an das Backend
-weitergereicht (siehe `vite.config.js`). Dadurch entstehen im Dev-Betrieb
-keine CORS-Probleme.
+Die App spricht mit zwei Servern, beide über den Vite-Proxy (siehe
+`vite.config.js`), dadurch gibt es im Dev-Betrieb keine CORS-Probleme:
 
-Ein anderes Backend wählt man über eine Umgebungsvariable:
+| Präfix | Ziel | Aufgabe |
+| --- | --- | --- |
+| `/backend/api/...` | Hochschul-Backend (CodeIgniter), Standard `https://app.billsquid.com` | Benutzer, Mandanten, Belege |
+| `/api/...` | lokaler Scan-Server (`billsquid_server/`, Port 3001) | Scanner-Eingang, Bilddateien, Google Drive |
 
-```bash
-VITE_API_TARGET=http://localhost:8080 npm run dev
-```
-
-Für einen Produktions-Build ohne Proxy muss die volle Backend-Origin gesetzt
-werden, weil dann kein Vite-Server mehr dazwischen steht:
+Andere Ziele wählt man über Umgebungsvariablen:
 
 ```bash
-VITE_API_BASE_URL=https://app.billsquid.com npm run build
+VITE_API_TARGET=http://localhost:8080 VITE_SCAN_TARGET=http://localhost:3002 npm run dev
 ```
+
+Mit `NO_SSL=1 npm run dev` läuft der Dev-Server ohne HTTPS – bequemer am
+Rechner, aber dann funktioniert der Kamera-Scan auf dem Handy nicht.
 
 ### Aufbau
 
 | Datei | Aufgabe |
 | --- | --- |
-| `src/api/client.js` | Basis-Request, Bearer-Token, Session, Fehlerobjekt `ApiError` |
-| `src/api/auth.js` | Login/Logout, Normalisierung des Benutzerobjekts |
-| `src/api/mandanten.js` | Mandanten aus den Backend-Benutzern ableiten |
-| `src/api/documents.js` | Belege lesen/anlegen/ändern/löschen inkl. Feld-Mapping |
-| `src/lib/pdf.js` | Datei-Aufbereitung: Bild → PDF, Base64-Kodierung |
+| `src/api.js` | Requests ans Backend (`apiFetch`), Feld-Mapping Beleg ↔ Backend-Dokument, Status-Übersetzung |
+| `src/localServer.js` | Requests an den Scan-Server (`lokalFetch`) mit automatischer Anmeldung |
+| `src/settings.js` | Persönliche Einstellungen, zuletzt gewählte Seite und Mandant |
+| `src/hooks/useUpload.js` | Upload: PDF → Backend, Bild → Scan-Server |
+| `src/lib/jpegZuPdf.js` | Handy-Scan (JPEG) ohne Bibliothek in ein einseitiges PDF verpacken |
 | `src/lib/stats.js` | Kennzahlen und Sortierung für die Startseiten |
+| `src/utils/belegFilter.js` | Suche, Zeitraum-, Status- und Kategoriefilter der Belegliste |
 | `src/components/DashboardBerater.jsx` | Startseite der Kanzlei (Mandantenübersicht) |
 | `src/components/DashboardMandant.jsx` | Startseite der Mandant:innen (eigene offene Belege) |
+| `src/components/BelegListe.jsx` | Belegliste – Tabelle am Schreibtisch, Karten am Handy |
+| `src/components/DocDetailModal.jsx` | Beleg-Dialog mit PDF-Vorschau (pdf.js) und Bearbeitung |
+| `src/components/ScannerInbox.jsx` | Scanner-Eingang: Scans benennen und Mandanten zuordnen |
+
+pdf.js braucht zur Laufzeit einige Hilfsdateien (WebAssembly-Decoder,
+Schriften). Die kopiert `npm install` automatisch nach `public/pdfjs/`; fehlen
+sie, bleiben gescannte Seiten in der Vorschau weiß (`npm run pdfjs:assets`).
 
 ### Rollen
 
@@ -115,15 +123,39 @@ besprochen werden:
    Hochladen einer Datei ist davon nichts bekannt, deshalb werden Platzhalter
    gesendet und nach der Analyse per `PATCH` überschrieben.
 
-4. **Nur PDF.** Der Kamera-Scan liefert JPEG. Bilder werden deshalb vor dem
-   Upload clientseitig in ein einseitiges PDF verpackt (`src/lib/pdf.js`).
+4. **Nur PDF.** Der Kamera-Scan liefert JPEG. Er wird deshalb vor dem
+   Upload clientseitig in ein einseitiges PDF verpackt (`src/lib/jpegZuPdf.js`).
+   Hochgeladene Bilddateien gehen weiterhin an den Scan-Server.
 
 5. **`pdf_url` der API zeigt auf die Backend-eigene baseURL** (teilweise
    `localhost:8080`) und ist deshalb nicht direkt verwendbar. Das Frontend
    baut den Pfad selbst und lädt die Datei mit Token als Blob.
 
-## Hinweis zu `billsquid_server/`
+## Scan-Server (`billsquid_server/`)
 
-Der lokale Node-Server war die Übergangslösung vor der Backend-Anbindung
-(eigenes Login, Dateiablage im Ordner `Belege/`). Er wird im laufenden Betrieb
-nicht mehr benötigt und nur noch zu Dokumentationszwecken aufbewahrt.
+Der lokale Node-Server verwaltet alles, was nicht ins Backend passt: den
+Scanner-Eingang (lokaler Ordner und Google Drive), Bilddateien und die
+Mandantenordner als lokales Archiv. Ohne ihn läuft die App weiter, aber
+Scanner-Eingang, Bild-Upload und Drive-Anbindung bleiben leer.
+
+```bash
+cd billsquid_server
+npm install
+npm start
+```
+
+Das Frontend erwartet diese Routen (alle mit Bearer-Token außer Login/Status):
+
+| Route | Zweck |
+| --- | --- |
+| `POST /auth/login`, `POST /auth/logout`, `GET /status` | Anmeldung und Erreichbarkeit |
+| `POST /upload?mandantNr&mandantName` | Bilddatei in den Mandantenordner |
+| `GET /belege?mandantNr&mandantName` | Dateien im Mandantenordner |
+| `GET`/`DELETE /belege/file?mandantNr&mandantName&name` | Datei lesen bzw. löschen |
+| `POST /belege/rename` | Datei im Mandantenordner umbenennen |
+| `GET /scan/inbox[?mandantNr]` | unzugeordnete Scans (optional mit `vorschlag`) |
+| `POST /scan/upload?mandantNr&mandantName` | Handy-Scan in den Eingang legen |
+| `GET /scan/file?name` | Scan aus dem Eingang lesen |
+| `POST /scan/assign` | Scan benennen und in den Mandantenordner verschieben |
+| `POST /drive/ordner` | Drive-Ordner je Mandant anlegen |
+| `GET /drive/inbox`, `GET /drive/file?id`, `POST /drive/assign` | Scanner-Eingang in Google Drive |

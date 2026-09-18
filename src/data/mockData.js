@@ -13,7 +13,8 @@ export const MANDANTEN = [
 export const STATUS_CONFIG = {
   analysiert:     { label: "Analysiert",     color: "#16a34a", bg: "#dcfce7", dot: "#16a34a" },
   ausstehend:     { label: "Ausstehend",     color: "#b45309", bg: "#fef3c7", dot: "#d97706" },
-  in_bearbeitung: { label: "In Bearbeitung", color: "#1d4ed8", bg: "#dbeafe", dot: "#3b82f6" },
+  // Von der KI ausgelesen, wartet auf Bestätigung durch die Kanzlei
+  in_bearbeitung: { label: "Zu prüfen",      color: "#1d4ed8", bg: "#dbeafe", dot: "#3b82f6" },
 };
 
 /**

@@ -57,6 +57,14 @@ export const neuerBelegPayload = ({ mandant, dateiName, dataUrl }) => ({
 
 /* ── Mapping Backend ↔ Frontend ─────────────────────────────────── */
 
+// Das Backend kennt pending / processing / analyzed; paid und corrected
+// kommen in Beispieldaten des Backend-Teams vor und gelten als erledigt.
+const STATUS_ZUM_BACKEND = { ausstehend: "pending", in_bearbeitung: "processing", analysiert: "analyzed" };
+const STATUS_VOM_BACKEND = {
+  pending: "ausstehend", processing: "in_bearbeitung", analyzed: "analysiert",
+  paid: "analysiert", corrected: "analysiert",
+};
+
 const FARBEN = ["#18537a", "#5b3a8a", "#0e6655", "#7d3c19", "#6b1a5c", "#1a5c3a", "#7a4a1a"];
 
 // Backend-User (Gruppe "client") → Mandant für Sidebar & Belegliste
@@ -101,16 +109,19 @@ export function documentToDoc(d) {
     size: d.size_bytes ? `${Math.round(d.size_bytes / 1024)} KB` : "—",
     type: "pdf",
     uploadedAt: deDatum(d.created_at),
-    status: d.status === "pending" ? "ausstehend" : d.status === "in_bearbeitung" ? "in_bearbeitung" : "analysiert",
+    status: STATUS_VOM_BACKEND[d.status] ?? "ausstehend",
     // Mehrere Klassifikationen je Beleg; Belege aus der Zeit mit nur einer
     // Kategorie werden weiterhin gelesen
     kategorien: bereinigeKategorien(extra.kategorien ?? (extra.category ? [extra.category] : [])),
     amount: extra.angerechnetBetrag ?? (formatBetrag(d.total_amount) || "---"),
+    // Sicherheit der KI-Analyse in Prozent – nur bei analysierten Belegen
+    confidence: extra.confidence ?? undefined,
     extractedData: {
       aussteller: d.issuer_name === "Unbekannt" ? "" : d.issuer_name || "",
       adresse: extra.adresse || "",
       ustIdNr: d.issuer_tax_id || "",
       datum: deDatum(d.invoice_date),
+      uhrzeit: extra.uhrzeit || "",
       rechnungsnr: d.invoice_number?.startsWith("UPL-") ? "" : d.invoice_number || "",
       zahlungsart: extra.zahlungsart || "",
       positionen: extra.positionen ?? [],
@@ -123,11 +134,11 @@ export function documentToDoc(d) {
   };
 }
 
-// Bestätigte Belegdaten aus dem Detail-Modal → PATCH-Payload fürs Backend
-export function updatePayload(editedData, kategorien = [], status = "analysiert") {
+// Belegdaten (bestätigt im Detail-Modal oder von der KI) → PATCH-Payload fürs Backend
+export function updatePayload(editedData, kategorien = [], { status = "analysiert", confidence } = {}) {
   const liste = bereinigeKategorien(kategorien);
   return {
-    status,
+    status: STATUS_ZUM_BACKEND[status] ?? status,
     invoice_number: editedData.rechnungsnr || undefined,
     issuer_name: editedData.aussteller || undefined,
     issuer_tax_id: editedData.ustIdNr || undefined,
@@ -143,6 +154,8 @@ export function updatePayload(editedData, kategorien = [], status = "analysiert"
       adresse: editedData.adresse || "",
       zahlungsart: editedData.zahlungsart || "",
       mwstSatz: editedData.mwstSatz || "",
+      uhrzeit: editedData.uhrzeit || "",
+      confidence,
     }),
   };
 }

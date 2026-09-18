@@ -21,11 +21,12 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
         <aside className={`sidebar${sidebarOpen ? " open" : ""}`}
                style={{ width: 240, background: "#0b2e44", display: "flex", flexDirection: "column", paddingTop: "calc(24px + env(safe-area-inset-top))", paddingBottom: "env(safe-area-inset-bottom)", position: "fixed", top: 0, left: 0, height: "100vh", zIndex: 200, transition: "transform .25s ease", boxSizing: "border-box" }}>
 
-            {/* Logo */}
-            <div style={{ padding: "0 16px 20px" }}>
+            {/* Logo – führt zur Startseite */}
+            <button onClick={() => { onNavigate?.("dashboard"); onClose(); }} title="Zur Startseite"
+                    style={{ background: "none", border: "none", cursor: "pointer", padding: "0 16px 20px", textAlign: "left", alignSelf: "flex-start" }}>
                 <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 17, fontWeight: 900, color: "#f0f8ff" }}>Bill</span>
                 <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 17, fontWeight: 400, color: "transparent", WebkitTextStroke: "1.2px #fd8f19" }}>Squid</span>
-            </div>
+            </button>
 
             {/* Mandant Switcher – nur für Kanzlei-Rollen, Mandanten sehen nur sich selbst */}
             {zeigeMandantenwechsel && (

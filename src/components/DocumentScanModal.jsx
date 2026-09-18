@@ -31,6 +31,8 @@ export default function DocumentScanModal({ onClose, onCapture }) {
     if (tryInit()) return;
     const poll = setInterval(() => { if (tryInit()) clearInterval(poll); }, 250);
     return () => clearInterval(poll);
+    // Nur einmal beim Öffnen – startCamera wird bei jedem Rendern neu erzeugt
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const startCamera = async () => {
@@ -98,7 +100,7 @@ export default function DocumentScanModal({ onClose, onCapture }) {
         // SVG-Overlay aktualisieren (kein Canvas-drawImage nötig → flüssig)
         drawSvgFrame(svg, tl, tr, br, bl, vw, vh);
       } catch { clearSvg(svg); }
-      finally  { try { mat?.delete(); } catch {} }
+      finally  { try { mat?.delete(); } catch { /* schon freigegeben */ } }
     }, 80); // ~12 fps reicht für Erkennung
   };
 
@@ -160,7 +162,7 @@ export default function DocumentScanModal({ onClose, onCapture }) {
         }
       }
     } catch (e) { console.warn("Eckerkennung:", e); }
-    finally { try { mat?.delete(); } catch {} }
+    finally { try { mat?.delete(); } catch { /* schon freigegeben */ } }
 
     // Fallback: Ecken = Bildecken mit 5% Inset
     if (!detectedCorners) {

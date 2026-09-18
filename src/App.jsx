@@ -4,8 +4,10 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { MANDANTEN, DOCS_BY_MANDANT } from "./data/mockData";
 import { apiFetch, userToMandant, documentToDoc, updatePayload, dateiZuDataUrl, neuerBelegPayload } from "./api";
 import { filterBelege, vorhandeneKategorien, LEERER_FILTER } from "./utils/belegFilter";
-import { kategorienVon, bereinigeKategorien } from "./data/kategorien";
+import { bereinigeKategorien } from "./data/kategorien";
 import { lokalFetch } from "./localServer";
+import { analysiereBeleg } from "./lib/kiAnalyse";
+import { ladeBelegDatei } from "./lib/belegDatei";
 import { ladeEinstellungen, speichereEinstellungen, ladeLetztenMandanten, merkeMandanten, ladeLetzteSeite, merkeSeite } from "./settings";
 import { useUpload } from "./hooks/useUpload";
 import MandantAvatar from "./components/MandantAvatar";
@@ -37,6 +39,22 @@ const istMandantenRolle = (user) => {
 };
 
 // Kurzmeldungen unten rechts: Erfolg, Fehler und neutraler Hinweis
+const SEITEN = ["dashboard", "belege", "einstellungen"];
+
+// Beim Neuladen auf derselben Seite bleiben, sonst mit der Startseite beginnen
+const startSeite = () => {
+  const gemerkt = ladeLetzteSeite();
+  return SEITEN.includes(gemerkt) ? gemerkt : "dashboard";
+};
+
+// Warum die KI einen Beleg nicht übernommen hat
+const KI_GRUND = {
+  keine_datei: "Datei nicht abrufbar",
+  kein_pdf:    "keine lesbare PDF-Datei",
+  kein_text:   "Scan ohne Texterkennung",
+  unbekannt:   "Beleg unbekannt",
+};
+
 const TOAST_STIL = {
   success: { icon: "bi-check2",                    stil: { background: "#f0fdf4", border: "1px solid #86efac", color: "#16a34a" } },
   error:   { icon: "bi-exclamation-triangle-fill", stil: { background: "#fef2f2", border: "1px solid #fca5a5", color: "#dc2626" } },
@@ -46,16 +64,13 @@ const TOAST_STIL = {
 export default function App({ user, onLogout }) {
   const istMandant = istMandantenRolle(user);
 
-  // Beim Neuladen auf derselben Seite bleiben
-  const gemerkteSeite = ladeLetzteSeite();
-  const [view, setView]               = useState(gemerkteSeite === "belege" ? "belege" : "dashboard");
+  const [seite, setSeite]             = useState(startSeite);
   const [zuordnungUnbekannt, setZuordnungUnbekannt] = useState(false);
   const [allDocs, setAllDocs]         = useState({ ...DOCS_BY_MANDANT });
   const [mandanten, setMandanten]     = useState(MANDANTEN);
   const [currentMandant, setCurrentMandant] = useState(MANDANTEN[0]);
   const [dragging, setDragging]       = useState(false);
   const [filter, setFilter]           = useState({ ...LEERER_FILTER });
-  const [page, setPage]               = useState(gemerkteSeite === "einstellungen" ? "einstellungen" : "belege");
   const [einstellungen, setEinstellungen] = useState(ladeEinstellungen);
   const [notification, setNotification] = useState(null);
   const [cameraOpen, setCameraOpen]   = useState(false);
@@ -66,6 +81,10 @@ export default function App({ user, onLogout }) {
   const [bearbeitenDirekt, setBearbeitenDirekt] = useState(false);
   const [scanInbox, setScanInbox]     = useState([]);
   const fileInputRef = useRef(null);
+  // Belege, die die KI gerade analysiert (ids) – schützt sie davor, dass das
+  // regelmäßige Neuladen sie zwischendurch wieder als "ausstehend" zeigt
+  const kiInArbeit = useRef(new Set());
+  const [kiLaeuft, setKiLaeuft] = useState(false);
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth <= 900);
@@ -76,23 +95,62 @@ export default function App({ user, onLogout }) {
   // Einstellungen bei jeder Änderung sichern
   useEffect(() => { speichereEinstellungen(einstellungen); }, [einstellungen]);
 
-  // "Einstellungen" ist eine eigene Seite; "Dashboard" und "Belege" sind die
-  // beiden Ansichten der Belegseite.
-  const navigiere = (seite) => {
-    if (seite === "einstellungen") {
-      setPage("einstellungen");
-    } else {
-      setPage("belege");
-      setView(seite);
-    }
+  /*
+   * Browser-Verlauf: Jeder Seitenwechsel und jeder geöffnete Dialog bekommt
+   * einen eigenen Eintrag. Die Zurück-Taste schließt so zuerst den Dialog
+   * (wichtig am Handy) und springt dann zur vorigen Seite, statt die App zu
+   * verlassen. Die URL bleibt dabei unverändert.
+   */
+  useEffect(() => {
+    window.history.replaceState({ seite: startSeite() }, "");
+
+    const onPopState = (e) => {
+      // Vorwärts auf einen Dialog-Eintrag: der Dialog ist schon zu, also weiter zurück
+      if (e.state?.dialog) { window.history.back(); return; }
+      setSeite(SEITEN.includes(e.state?.seite) ? e.state.seite : "dashboard");
+      setSelectedDoc(null);
+      setBearbeitenDirekt(false);
+      setCameraOpen(false);
+      setSidebarOpen(false);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const navigiere = (ziel) => {
     setSidebarOpen(false);
+    if (ziel === seite) return;
+    window.history.pushState({ seite: ziel }, "");
+    setSeite(ziel);
   };
 
-  // Für die Markierung in Sidebar und Bottom-Nav
-  const aktiveSeite = page === "einstellungen" ? "einstellungen" : view;
+  // Dialoge (Beleg, Kamera) legen einen Verlaufseintrag an; geschlossen wird
+  // über "zurück", damit der Eintrag nicht als toter Schritt liegen bleibt.
+  const oeffneDialog = () => {
+    if (!window.history.state?.dialog) window.history.pushState({ seite, dialog: true }, "");
+  };
+  const schliesseDialog = () => {
+    if (window.history.state?.dialog) {
+      window.history.back();   // popstate schließt den Dialog
+    } else {
+      setSelectedDoc(null);
+      setBearbeitenDirekt(false);
+      setCameraOpen(false);
+    }
+  };
+
+  const oeffneBeleg = (doc, bearbeiten = false) => {
+    setBearbeitenDirekt(bearbeiten);
+    setSelectedDoc(doc);
+    oeffneDialog();
+  };
+  const oeffneKamera = () => {
+    setCameraOpen(true);
+    oeffneDialog();
+  };
 
   // Aktuelle Seite merken, damit ein Neuladen hier bleibt
-  useEffect(() => { merkeSeite(aktiveSeite); }, [aktiveSeite]);
+  useEffect(() => { merkeSeite(seite); }, [seite]);
 
   const showNotification = (msg, type = "success") => {
     setNotification({ msg, type });
@@ -192,7 +250,7 @@ export default function App({ user, onLogout }) {
     } catch {
       console.warn("Backend nicht erreichbar – Demo-Modus mit Mock-Daten.");
     }
-  }, [istMandant, user]);
+  }, [istMandant, user, einstellungen.mandantMerken]);
 
   // Belege aus der Datenbank laden – alle sichtbaren auf einmal und nach
   // Mandant gruppiert. Die Kanzlei-Startseite braucht die Zahlen aller
@@ -203,7 +261,10 @@ export default function App({ user, onLogout }) {
       const gruppiert = {};
       (data || []).forEach((d) => {
         const mandantId = d.client_user_id ?? d.user_id;
-        (gruppiert[mandantId] ||= []).push(documentToDoc(d));
+        const doc = documentToDoc(d);
+        (gruppiert[mandantId] ||= []).push(
+            kiInArbeit.current.has(doc.id) ? { ...doc, status: "in_bearbeitung", kiLaeuft: true } : doc
+        );
       });
       setAllDocs((prev) => {
         const next = { ...prev };
@@ -241,7 +302,7 @@ export default function App({ user, onLogout }) {
         if (!newDocs.length) return prev;
         return { ...prev, [mandant.id]: [...newDocs, ...existing] };
       });
-    } catch {}
+    } catch { /* Scan-Server nicht erreichbar */ }
   }, []);
 
   // Erst die Mandanten (leert die Demo-Daten), danach die Belege – sonst
@@ -259,7 +320,7 @@ export default function App({ user, onLogout }) {
   useEffect(() => {
     loadBackendDocs(currentMandant);
     loadServerDocs(currentMandant);
-  }, [currentMandant]);
+  }, [currentMandant, loadBackendDocs, loadServerDocs]);
 
   // Scanner-Eingang abfragen – zwei Quellen: der lokale Scan-Ordner und der
   // freigegebene Google-Drive-Ordner.
@@ -298,7 +359,7 @@ export default function App({ user, onLogout }) {
       loadBackendDocs(currentMandant);
     }, Math.max(5, einstellungen.intervallSekunden) * 1000);
     return () => clearInterval(timer);
-  }, [currentMandant, istMandant,einstellungen.autoAktualisieren, einstellungen.intervallSekunden]);
+  }, [currentMandant, fetchInbox, loadBackendDocs, loadServerDocs, einstellungen.autoAktualisieren, einstellungen.intervallSekunden]);
 
   /**
    * Handy-Scan in den Scanner-Eingang legen, statt ihn sofort hochzuladen.
@@ -438,24 +499,81 @@ export default function App({ user, onLogout }) {
   // gleich dessen Belege öffnen.
   const oeffneMandantenbelege = (m) => {
     selectMandant(m);
-    setView("belege");
+    navigiere("belege");
   };
 
-  const onDrop = useCallback((e) => {
+  const onDrop = (e) => {
     e.preventDefault();
     setDragging(false);
     uploadToLocal(e.dataTransfer.files);
-  }, [currentMandant]);
+  };
 
-  const runKiAnalysis = () => {
+  const aendereBeleg = (mandantId, docId, aenderung) =>
+      setAllDocs((prev) => ({
+        ...prev,
+        [mandantId]: (prev[mandantId] || []).map((d) => (d.id === docId ? { ...d, ...aenderung } : d)),
+      }));
+
+  /**
+   * KI-Analyse der ausstehenden Belege (simuliert, siehe lib/kiAnalyse.js).
+   * Erkennt die KI einen Beleg, trägt sie alle Daten ein und setzt ihn auf
+   * "zu prüfen" – bestätigt wird er danach im Beleg-Dialog.
+   */
+  const runKiAnalysis = async () => {
+    const mandant = currentMandant;
     const pending = docs.filter((d) => d.status === "ausstehend");
     if (!pending.length) { showNotification("Keine ausstehenden Belege.", "error"); return; }
-    setAllDocs((prev) => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map((d) => d.status === "ausstehend" ? { ...d, status: "in_bearbeitung" } : d) }));
-    setTimeout(() => {
-      // Ohne Klassifikation vergibt die Analyse eine Startkategorie – vorhandene bleiben unberührt
-      setAllDocs((prev) => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map((d) => d.status === "in_bearbeitung" ? { ...d, status: "analysiert", kategorien: kategorienVon(d).length ? kategorienVon(d) : ["Sonstige Ausgaben"] } : d) }));
-      showNotification("KI-Analyse abgeschlossen ✓");
-    }, 2800);
+
+    setKiLaeuft(true);
+    pending.forEach((d) => {
+      kiInArbeit.current.add(d.id);
+      aendereBeleg(mandant.id, d.id, { status: "in_bearbeitung", kiLaeuft: true });
+    });
+
+    let erkannt = 0;
+    const nichtErkannt = [];
+    for (const doc of pending) {
+      let ergebnis;
+      try {
+        ergebnis = await analysiereBeleg(await ladeBelegDatei(doc, mandant));
+      } catch {
+        ergebnis = { erkannt: false, grund: "keine_datei" };
+      }
+
+      if (ergebnis.erkannt) {
+        const { extractedData, kategorien, confidence } = ergebnis;
+        try {
+          if (doc.backendDoc) {
+            await apiFetch(`/documents/${doc.apiId}`, {
+              method: "PATCH",
+              body: updatePayload(extractedData, kategorien, { status: "in_bearbeitung", confidence }),
+            });
+          }
+          aendereBeleg(mandant.id, doc.id, {
+            status: "in_bearbeitung", kiLaeuft: false, extractedData, kategorien, confidence,
+            amount: extractedData.angerechnetBetrag ?? extractedData.gesamtBetrag,
+          });
+          erkannt++;
+        } catch (e) {
+          aendereBeleg(mandant.id, doc.id, { status: "ausstehend", kiLaeuft: false });
+          nichtErkannt.push(`${doc.name}: Speichern fehlgeschlagen (${e.message})`);
+        }
+      } else {
+        aendereBeleg(mandant.id, doc.id, { status: "ausstehend", kiLaeuft: false });
+        nichtErkannt.push(`${doc.name}: ${KI_GRUND[ergebnis.grund]}`);
+      }
+      kiInArbeit.current.delete(doc.id);
+    }
+    setKiLaeuft(false);
+
+    if (nichtErkannt.length) console.info("KI-Analyse – nicht erkannt:\n" + nichtErkannt.join("\n"));
+    if (erkannt && !nichtErkannt.length) {
+      showNotification(`KI-Analyse abgeschlossen – ${erkannt} Beleg${erkannt !== 1 ? "e" : ""} bitte prüfen ✓`);
+    } else if (erkannt) {
+      showNotification(`${erkannt} Beleg${erkannt !== 1 ? "e" : ""} analysiert, ${nichtErkannt.length} nicht erkannt`, "info");
+    } else {
+      showNotification(nichtErkannt.length === 1 ? `Nicht erkannt – ${nichtErkannt[0]}` : `${nichtErkannt.length} Belege nicht erkannt`, "error");
+    }
   };
 
   const handleConfirm = async (docId, editedData, kategorien = []) => {
@@ -466,7 +584,8 @@ export default function App({ user, onLogout }) {
       try {
         await apiFetch(`/documents/${doc.apiId}`, {
           method: "PATCH",
-          body: updatePayload(editedData, kategorien),
+          // Die Sicherheit der KI bleibt beim Bestätigen erhalten
+          body: updatePayload(editedData, kategorien, { confidence: doc.confidence }),
         });
       } catch (e) {
         showNotification(`Speichern im Backend fehlgeschlagen: ${e.message}`, "error");
@@ -475,7 +594,7 @@ export default function App({ user, onLogout }) {
     }
 
     setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map(d => d.id === docId ? { ...d, status: "analysiert", extractedData: editedData, kategorien: bereinigeKategorien(kategorien), amount: editedData.angerechnetBetrag ?? editedData.gesamtBetrag } : d) }));
-    setSelectedDoc(null);
+    schliesseDialog();
     showNotification("Beleg bestätigt und gespeichert ✓");
   };
 
@@ -518,7 +637,7 @@ export default function App({ user, onLogout }) {
       }
     }
     setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).filter(d => d.id !== doc.id) }));
-    setSelectedDoc(null);
+    schliesseDialog();
     showNotification("Beleg gelöscht", "error");
   };
 
@@ -573,11 +692,11 @@ export default function App({ user, onLogout }) {
       `}</style>
 
         {/* Modals */}
-        {cameraOpen && <DocumentScanModal onClose={() => setCameraOpen(false)}
+        {cameraOpen && <DocumentScanModal onClose={schliesseDialog}
                                           onCapture={(file) => zeigeScannerEingang ? scanInEingang(file) : uploadToLocal([file])} />}
         {selectedDoc && <DocDetailModal key={selectedDoc.id} doc={selectedDoc} mandant={currentMandant} isMobile={isMobile}
                                         startImBearbeiten={bearbeitenDirekt}
-                                        onClose={() => { setSelectedDoc(null); setBearbeitenDirekt(false); }}
+                                        onClose={schliesseDialog}
                                         onRename={renameDoc}
                                         onConfirm={(ed, kats) => handleConfirm(selectedDoc.id, ed, kats)}
                                         onDiscard={() => handleDiscard(selectedDoc)} />}
@@ -586,14 +705,14 @@ export default function App({ user, onLogout }) {
         {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
 
         {/* Mobile Topbar */}
-        <MobileTopbar onMenuClick={() => setSidebarOpen((v) => !v)} onCameraClick={() => setCameraOpen(true)} />
+        <MobileTopbar onMenuClick={() => setSidebarOpen((v) => !v)} onCameraClick={oeffneKamera} onLogoClick={() => navigiere("dashboard")} />
 
         {/* Sidebar */}
-        <Sidebar currentMandant={currentMandant} mandanten={mandanten} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} activePage={aktiveSeite} onNavigate={navigiere} zeigeMandantenwechsel={!istMandant} />
+        <Sidebar currentMandant={currentMandant} mandanten={mandanten} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} activePage={seite} onNavigate={navigiere} zeigeMandantenwechsel={!istMandant} />
 
         {/* Main */}
         <main className="main-content" style={{ marginLeft: 240, flex: 1, minWidth: 0, padding: isMobile ? "90px 16px 84px" : "30px 32px", animation: "fadeUp .4s ease", display: "flex", justifyContent: "center", background: "#f8f7f4" }}>
-          {page === "einstellungen" ? (
+          {seite === "einstellungen" ? (
               <SettingsPage user={user} einstellungen={einstellungen} setEinstellungen={setEinstellungen}
                             showNotification={showNotification} isMobile={isMobile} />
           ) : (
@@ -602,15 +721,15 @@ export default function App({ user, onLogout }) {
             {/* Dateiauswahl – wird von der Startseite und der Belegliste genutzt */}
             <input ref={fileInputRef} type="file" multiple accept=".pdf,image/*" style={{ display: "none" }} onChange={(e) => uploadToLocal(e.target.files)} />
 
-            {view === "dashboard" ? (
+            {seite === "dashboard" ? (
               istMandant ? (
                 <DashboardMandant
                     user={user}
                     mandant={currentMandant}
                     docs={docs}
                     isMobile={isMobile}
-                    onOpenDoc={setSelectedDoc}
-                    onZurBelegliste={() => setView("belege")}
+                    onOpenDoc={(doc) => oeffneBeleg(doc)}
+                    onZurBelegliste={() => navigiere("belege")}
                 />
               ) : (
                 <DashboardBerater
@@ -621,7 +740,7 @@ export default function App({ user, onLogout }) {
                     zuordnungUnbekannt={zuordnungUnbekannt}
                     isMobile={isMobile}
                     onSelectMandant={oeffneMandantenbelege}
-                    onScannerEingang={() => setView("belege")}
+                    onScannerEingang={() => navigiere("belege")}
                 />
               )
             ) : (<>
@@ -670,10 +789,16 @@ export default function App({ user, onLogout }) {
             {/* KI Banner */}
             <div style={{ background: "linear-gradient(135deg,#0b2e44 0%,#18537a 100%)", borderRadius: 10, padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, border: "1px solid rgba(201,168,76,.2)" }}>
               <div>
-                <p style={{ color: "#f0f8ff", fontWeight: 600, fontSize: 13, marginBottom: 2 }}>KI-Analyse bereit</p>
-                <p style={{ color: "#7ab8d0", fontSize: 11 }}>{stats.ausstehend} Beleg{stats.ausstehend !== 1 ? "e" : ""} warten auf Klassifizierung</p>
+                <p style={{ color: "#f0f8ff", fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{kiLaeuft ? "KI-Analyse läuft…" : "KI-Analyse bereit"}</p>
+                <p style={{ color: "#7ab8d0", fontSize: 11 }}>
+                  {kiLaeuft ? "Belege werden gelesen und Daten extrahiert"
+                            : `${stats.ausstehend} Beleg${stats.ausstehend !== 1 ? "e" : ""} warten auf Klassifizierung`}
+                </p>
               </div>
-              <button onClick={runKiAnalysis} style={{ padding: "8px 16px", background: "linear-gradient(135deg,#fd8f19,#ffb054)", border: "none", borderRadius: 7, color: "#0b2e44", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Jetzt analysieren ▶</button>
+              <button onClick={runKiAnalysis} disabled={kiLaeuft}
+                      style={{ padding: "8px 16px", background: "linear-gradient(135deg,#fd8f19,#ffb054)", border: "none", borderRadius: 7, color: "#0b2e44", fontSize: 12, fontWeight: 700, cursor: kiLaeuft ? "default" : "pointer", opacity: kiLaeuft ? 0.6 : 1, whiteSpace: "nowrap" }}>
+                {kiLaeuft ? "Analysiere…" : "Jetzt analysieren ▶"}
+              </button>
             </div>
 
             {/* Doc Table */}
@@ -693,8 +818,8 @@ export default function App({ user, onLogout }) {
                   docs={filteredDocs}
                   isMobile={isMobile}
                   query={filter.query}
-                  onOpen={(doc) => { setBearbeitenDirekt(false); setSelectedDoc(doc); }}
-                  onEdit={(doc) => { setBearbeitenDirekt(true); setSelectedDoc(doc); }}
+                  onOpen={(doc) => oeffneBeleg(doc)}
+                  onEdit={(doc) => oeffneBeleg(doc, true)}
                   leerAnzeige={
                     <div style={{ padding: "40px 20px", textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
                       {docs.length === 0 ? "Noch keine Belege für diesen Mandanten." : (
@@ -716,7 +841,7 @@ export default function App({ user, onLogout }) {
         </main>
 
         {/* Bottom Nav */}
-        <BottomNav activePage={aktiveSeite} onNavigate={navigiere} />
+        <BottomNav activePage={seite} onNavigate={navigiere} />
 
         {/* Toast */}
         {notification && (

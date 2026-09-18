@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'public/pdfjs']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -25,5 +25,15 @@ export default defineConfig([
     rules: {
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
     },
+  },
+  // Node-Skripte und Vite-Konfiguration laufen nicht im Browser
+  {
+    files: ['vite.config.js', 'scripts/**/*.{js,mjs}', 'billsquid_server/**/*.js'],
+    languageOptions: { globals: globals.node },
+  },
+  // Einstiegspunkt – wird nie per Fast Refresh neu geladen
+  {
+    files: ['src/main.jsx'],
+    rules: { 'react-refresh/only-export-components': 'off' },
   },
 ])

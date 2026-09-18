@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import FileIcon from './FileIcon';
 import StatusBadge from './StatusBadge';
 import { KATEGORIEN, kategorienVon, bereinigeKategorien } from '../data/kategorien';
-import { lokalFetch } from '../localServer';
+import { ladeBelegDatei } from '../lib/belegDatei';
+import { oeffnePdf } from '../lib/pdfjs';
 
 /* Leeres Datengerüst für Belege ohne KI-Extraktion (hochgeladene/gescannte
    Dateien vom Server) – gleiche Ansicht, nur ohne eingetragene Zahlen. */
@@ -57,26 +58,7 @@ function ConfidenceRing({ value }) {
 const MAX_SEITEN = 5;
 
 async function pdfZuBildern(blob) {
-  // Bewusst der "legacy"-Build: Er ist für ältere Browser übersetzt und läuft
-  // auch in Safari-Versionen, in denen der normale Build aussteigt.
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  // Der Worker wird von Vite als eigene Datei ausgeliefert
-  const worker = await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url");
-  pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
-
-  // Aufgeräumt wird über den Ladevorgang – das Dokument selbst hat kein
-  // destroy() (mehr).
-  //
-  // Die drei Pfade sind wichtig: pdf.js lädt Bilddecoder (JBIG2, JPEG 2000),
-  // Farbprofile und Standardschriften erst bei Bedarf nach. Ohne sie bleibt
-  // eine gescannte Seite stillschweigend weiß. Die Dateien liegen unter
-  // public/pdfjs (siehe scripts/copy-pdfjs-assets.mjs).
-  const ladevorgang = pdfjs.getDocument({
-    data: await blob.arrayBuffer(),
-    wasmUrl: "/pdfjs/wasm/",
-    iccUrl: "/pdfjs/iccs/",
-    standardFontDataUrl: "/pdfjs/standard_fonts/",
-  });
+  const ladevorgang = await oeffnePdf(blob);
   const datei = await ladevorgang.promise;
   const bilder = [];
   try {
@@ -112,14 +94,12 @@ function ServerFilePreview({ doc, mandant, isMobile }) {
 
     const load = async () => {
       try {
-        // fetch statt <img src>, weil beide Server den Auth-Header verlangen
-        const res = doc.backendDoc
-            ? await fetch(`/backend/api/documents/${doc.apiId}/pdf`, {
-                headers: { Authorization: `Bearer ${sessionStorage.getItem("bs_api_token")}` },
-              })
-            : await lokalFetch(`/api/belege/file?mandantNr=${encodeURIComponent(mandant.nr)}&mandantName=${encodeURIComponent(mandant.name)}&name=${encodeURIComponent(doc.name)}`);
-        if (!res.ok) throw new Error();
-        const blob = await res.blob();
+        // Nur die Felder, von denen die Datei abhängt – das Beleg-Objekt selbst
+        // wird beim regelmäßigen Neuladen ersetzt und soll keinen Neuaufbau auslösen
+        const blob = await ladeBelegDatei(
+            { backendDoc: doc.backendDoc, apiId: doc.apiId, name: doc.name },
+            { nr: mandant.nr, name: mandant.name },
+        );
         objectUrl = URL.createObjectURL(blob);
         if (abgebrochen) return;
         setFileUrl(objectUrl);
