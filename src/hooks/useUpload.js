@@ -1,47 +1,27 @@
 import { useState } from "react";
 import { apiFetch, documentToDoc, dateiZuDataUrl, neuerBelegPayload } from "../api";
-import { lokalFetch } from "../localServer";
+import { bildZuPdfDatei, alsPdfName } from "../lib/jpegZuPdf";
 
 export function useUpload(currentMandant, setAllDocs, showNotification) {
   const [uploading, setUploading]           = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  // PDF → Backend (MySQL): legt ein Dokument mit Platzhalter-Rechnungsdaten an,
+  // Datei → Backend (MySQL): legt ein Dokument mit Platzhalter-Rechnungsdaten an,
   // die echten Werte werden später im Detail-Modal eingetragen und gePATCHt.
-  const uploadPdfToBackend = async (file) => {
+  // Das Backend nimmt nur PDF – ein Bild wird deshalb wie ein Handy-Scan in
+  // ein PDF verpackt, damit es im Beleg-Dialog angezeigt werden kann.
+  const uploadToBackend = async (file) => {
+    const istPdf = file.type === "application/pdf";
+    const pdf = istPdf ? file : await bildZuPdfDatei(file, alsPdfName(file.name));
     const { data } = await apiFetch("/documents", {
       method: "POST",
       body: neuerBelegPayload({
         mandant: currentMandant,
-        dateiName: file.name,
-        dataUrl: await dateiZuDataUrl(file),
+        dateiName: pdf.name,
+        dataUrl: await dateiZuDataUrl(pdf),
       }),
     });
     return documentToDoc(data);
-  };
-
-  // Bild → lokaler Scan-Server (das Backend nimmt nur PDFs an)
-  const uploadImageToLocal = async (file, i) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    const response = await lokalFetch(
-        `/api/upload?mandantNr=${encodeURIComponent(currentMandant.nr)}&mandantName=${encodeURIComponent(currentMandant.name)}`,
-        { method: "POST", body: formData }
-    );
-    if (!response.ok) throw new Error("Lokaler Server nicht erreichbar");
-    const result = await response.json();
-    if (!result.success) throw new Error("Upload fehlgeschlagen");
-    return {
-      id: Date.now() + i,
-      name: file.name,
-      size: result.size ? `${(result.size / 1024).toFixed(0)} KB` : `${(file.size / 1024).toFixed(0)} KB`,
-      type: "image",
-      uploadedAt: new Date().toLocaleDateString("de-DE"),
-      status: "ausstehend",
-      kategorien: [],
-      amount: "—",
-      serverFile: true,
-    };
   };
 
   const uploadToLocal = async (files) => {
@@ -60,11 +40,7 @@ export function useUpload(currentMandant, setAllDocs, showNotification) {
       const file = validFiles[i];
       setUploadProgress(((i + 1) / validFiles.length) * 100);
       try {
-        uploadedDocs.push(
-            file.type === "application/pdf"
-                ? await uploadPdfToBackend(file)
-                : await uploadImageToLocal(file, i)
-        );
+        uploadedDocs.push(await uploadToBackend(file));
       } catch (e) {
         if (e.status === 401) {
           showNotification("Sitzung abgelaufen – bitte neu anmelden.", "error");
@@ -72,12 +48,7 @@ export function useUpload(currentMandant, setAllDocs, showNotification) {
           window.location.reload();
           return;
         }
-        showNotification(
-            file.type === "application/pdf"
-                ? `Upload ins Backend fehlgeschlagen: ${e.message}`
-                : "Lokaler Server nicht erreichbar. Bitte 'node server.js' starten.",
-            "error"
-        );
+        showNotification(`Upload von ${file.name} fehlgeschlagen: ${e.message}`, "error");
         setUploading(false);
         return;
       }

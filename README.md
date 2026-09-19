@@ -41,8 +41,8 @@ Rechner, aber dann funktioniert der Kamera-Scan auf dem Handy nicht.
 | `src/api.js` | Requests ans Backend (`apiFetch`), Feld-Mapping Beleg ↔ Backend-Dokument, Status-Übersetzung |
 | `src/localServer.js` | Requests an den Scan-Server (`lokalFetch`) mit automatischer Anmeldung |
 | `src/settings.js` | Persönliche Einstellungen, zuletzt gewählte Seite und Mandant |
-| `src/hooks/useUpload.js` | Upload: PDF → Backend, Bild → Scan-Server |
-| `src/lib/jpegZuPdf.js` | Handy-Scan (JPEG) ohne Bibliothek in ein einseitiges PDF verpacken |
+| `src/hooks/useUpload.js` | Upload ins Backend, Bilder vorher als PDF verpackt |
+| `src/lib/jpegZuPdf.js` | Bilder (Handy-Scan, PNG, JPG …) ohne Bibliothek in ein einseitiges PDF verpacken |
 | `src/lib/stats.js` | Kennzahlen und Sortierung für die Startseiten |
 | `src/utils/belegFilter.js` | Suche, Zeitraum-, Status- und Kategoriefilter der Belegliste |
 | `src/components/DashboardBerater.jsx` | Startseite der Kanzlei (Mandantenübersicht) |
@@ -123,9 +123,10 @@ besprochen werden:
    Hochladen einer Datei ist davon nichts bekannt, deshalb werden Platzhalter
    gesendet und nach der Analyse per `PATCH` überschrieben.
 
-4. **Nur PDF.** Der Kamera-Scan liefert JPEG. Er wird deshalb vor dem
-   Upload clientseitig in ein einseitiges PDF verpackt (`src/lib/jpegZuPdf.js`).
-   Hochgeladene Bilddateien gehen weiterhin an den Scan-Server.
+4. **Nur PDF.** Kamera-Scans, hochgeladene Bilder und Bild-Scans aus dem
+   Scanner-Eingang (lokal oder Google Drive) werden deshalb vor dem Upload
+   clientseitig in ein einseitiges PDF verpackt (`src/lib/jpegZuPdf.js`).
+   Das Original bleibt im Mandantenordner bzw. in Drive als Archiv liegen.
 
 5. **`pdf_url` der API zeigt auf die Backend-eigene baseURL** (teilweise
    `localhost:8080`) und ist deshalb nicht direkt verwendbar. Das Frontend

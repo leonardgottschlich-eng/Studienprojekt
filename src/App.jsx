@@ -8,6 +8,7 @@ import { bereinigeKategorien } from "./data/kategorien";
 import { lokalFetch } from "./localServer";
 import { analysiereBeleg } from "./lib/kiAnalyse";
 import { ladeBelegDatei } from "./lib/belegDatei";
+import { bildZuPdfDatei, alsPdfName } from "./lib/jpegZuPdf";
 import { ladeEinstellungen, speichereEinstellungen, ladeLetztenMandanten, merkeMandanten, ladeLetzteSeite, merkeSeite } from "./settings";
 import { useUpload } from "./hooks/useUpload";
 import MandantAvatar from "./components/MandantAvatar";
@@ -46,6 +47,9 @@ const startSeite = () => {
   const gemerkt = ladeLetzteSeite();
   return SEITEN.includes(gemerkt) ? gemerkt : "dashboard";
 };
+
+// "Beleg.png" → "Beleg" – zum Abgleich von Archivkopie und Datenbank-Beleg
+const ohneEndung = (name = "") => name.replace(/\.[^.]+$/, "");
 
 // Warum die KI einen Beleg nicht übernommen hat
 const KI_GRUND = {
@@ -272,9 +276,10 @@ export default function App({ user, onLogout }) {
         // sie stehen nicht in der Datenbank.
         for (const id of new Set([...Object.keys(prev), ...Object.keys(gruppiert)])) {
           // Zugeordnete Scans liegen zusätzlich im lokalen Mandantenordner –
-          // bei gleichem Dateinamen gewinnt der Beleg aus der Datenbank
-          const namen = new Set((gruppiert[id] || []).map((d) => d.name));
-          const andere = (prev[id] || []).filter((d) => !d.backendDoc && !namen.has(d.name));
+          // bei gleichem Namen gewinnt der Beleg aus der Datenbank. Verglichen
+          // wird ohne Endung: Aus "Beleg.png" wird im Backend "Beleg.pdf".
+          const namen = new Set((gruppiert[id] || []).map((d) => ohneEndung(d.name)));
+          const andere = (prev[id] || []).filter((d) => !d.backendDoc && !namen.has(ohneEndung(d.name)));
           next[id] = [...(gruppiert[id] || []), ...andere];
         }
         return next;
@@ -297,8 +302,8 @@ export default function App({ user, onLogout }) {
       }));
       setAllDocs((prev) => {
         const existing = prev[mandant.id] || [];
-        const names = new Set(existing.map((d) => d.name));
-        const newDocs = serverDocs.filter((d) => !names.has(d.name));
+        const names = new Set(existing.map((d) => ohneEndung(d.name)));
+        const newDocs = serverDocs.filter((d) => !names.has(ohneEndung(d.name)));
         if (!newDocs.length) return prev;
         return { ...prev, [mandant.id]: [...newDocs, ...existing] };
       });
@@ -409,19 +414,20 @@ export default function App({ user, onLogout }) {
 
     try {
       // 1. Beleg in der Datenbank anlegen – zuerst, damit bei einem Fehler
-      //    noch nichts verschoben wurde. Bilder kann das Backend nicht annehmen.
-      if (istPdf) {
-        const inhalt = await lokalFetch(lesePfad);
-        if (!inhalt.ok) throw new Error("Scan konnte nicht gelesen werden.");
-        await apiFetch("/documents", {
-          method: "POST",
-          body: neuerBelegPayload({
-            mandant,
-            dateiName: zielName,
-            dataUrl: await dateiZuDataUrl(await inhalt.blob()),
-          }),
-        });
-      }
+      //    noch nichts verschoben wurde. Das Backend nimmt nur PDF an, ein
+      //    Bild wird deshalb wie ein Handy-Scan in ein PDF verpackt.
+      const inhalt = await lokalFetch(lesePfad);
+      if (!inhalt.ok) throw new Error("Scan konnte nicht gelesen werden.");
+      const original = await inhalt.blob();
+      const pdf = istPdf ? original : await bildZuPdfDatei(original, alsPdfName(zielName));
+      await apiFetch("/documents", {
+        method: "POST",
+        body: neuerBelegPayload({
+          mandant,
+          dateiName: istPdf ? zielName : alsPdfName(zielName),
+          dataUrl: await dateiZuDataUrl(pdf),
+        }),
+      });
 
       // 2. Original einsortieren: in Drive verschieben bzw. lokal umlegen
       const res = ausDrive
@@ -442,9 +448,7 @@ export default function App({ user, onLogout }) {
       setScanInbox((prev) => prev.filter((f) => (ausDrive ? f.id !== datei.id : f.name !== fileName)));
       loadBackendDocs(mandant);
       loadServerDocs(mandant);
-      showNotification(istPdf
-          ? `Beleg zugeordnet: ${mandant.name} ✓`
-          : `Bild zugeordnet: ${mandant.name} – ${ausDrive ? "in Drive verschoben" : "bleibt lokal"}, das Backend nimmt nur PDF`);
+      showNotification(`Beleg zugeordnet: ${mandant.name} ✓`);
     } catch (e) {
       showNotification(`Zuordnung fehlgeschlagen: ${e.message}`, "error");
     }

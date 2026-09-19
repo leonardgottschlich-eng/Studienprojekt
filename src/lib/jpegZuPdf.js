@@ -112,3 +112,30 @@ export function dataUrlZuBytes(dataUrl) {
 export function scanZuPdfDatei(dataUrl, dateiName) {
   return new File([jpegZuPdfBytes(dataUrlZuBytes(dataUrl))], dateiName, { type: "application/pdf" });
 }
+
+/**
+ * Beliebiges Bild (PNG, JPG, WebP …) → PDF-Datei für den Upload.
+ *
+ * Das Bild wird über ein Canvas neu als JPEG gezeichnet. Das kostet etwas
+ * Qualität, deckt dafür jedes Format ab, das der Browser öffnen kann, und
+ * berücksichtigt die Drehung aus den Kameradaten (EXIF). Transparente Stellen
+ * eines PNG werden weiß statt schwarz.
+ */
+const MAX_KANTE = 4000; // größere Scans werden verkleinert, sonst wird das PDF unnötig schwer
+
+export async function bildZuPdfDatei(bild, dateiName) {
+  const bitmap = await createImageBitmap(bild);
+  const skala  = Math.min(1, MAX_KANTE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width  = Math.round(bitmap.width * skala);
+  canvas.height = Math.round(bitmap.height * skala);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return scanZuPdfDatei(canvas.toDataURL("image/jpeg", 0.92), dateiName);
+}
+
+/** "Beleg.png" → "Beleg.pdf" */
+export const alsPdfName = (name) => name.replace(/\.[^.]+$/, "") + ".pdf";
