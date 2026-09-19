@@ -1,6 +1,5 @@
 /**
- * pdf.js laden und ein PDF öffnen – gemeinsam genutzt von der Belegvorschau
- * (Seiten zeichnen) und der KI-Analyse (Text auslesen).
+ * pdf.js laden und ein PDF öffnen (für die Belegvorschau).
  */
 
 export async function oeffnePdf(blob) {
@@ -24,23 +23,4 @@ export async function oeffnePdf(blob) {
     iccUrl: "/pdfjs/iccs/",
     standardFontDataUrl: "/pdfjs/standard_fonts/",
   });
-}
-
-/**
- * Text aller Seiten eines PDFs. Ein Scan ohne Texterkennung (OCR) besteht nur
- * aus einem Bild – dann ist das Ergebnis leer.
- */
-export async function pdfText(blob, maxSeiten = 5) {
-  const ladevorgang = await oeffnePdf(blob);
-  try {
-    const datei = await ladevorgang.promise;
-    const teile = [];
-    for (let nr = 1; nr <= Math.min(datei.numPages, maxSeiten); nr++) {
-      const inhalt = await (await datei.getPage(nr)).getTextContent();
-      teile.push(inhalt.items.map((item) => item.str).join(" "));
-    }
-    return teile.join("\n");
-  } finally {
-    try { await ladevorgang.destroy(); } catch { /* nicht weiter schlimm */ }
-  }
 }

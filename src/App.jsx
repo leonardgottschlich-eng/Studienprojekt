@@ -7,7 +7,6 @@ import { filterBelege, vorhandeneKategorien, LEERER_FILTER } from "./utils/beleg
 import { bereinigeKategorien } from "./data/kategorien";
 import { lokalFetch } from "./localServer";
 import { analysiereBeleg } from "./lib/kiAnalyse";
-import { ladeBelegDatei } from "./lib/belegDatei";
 import { bildZuPdfDatei, alsPdfName } from "./lib/jpegZuPdf";
 import { ladeEinstellungen, speichereEinstellungen, ladeLetztenMandanten, merkeMandanten, ladeLetzteSeite, merkeSeite } from "./settings";
 import { useUpload } from "./hooks/useUpload";
@@ -50,14 +49,6 @@ const startSeite = () => {
 
 // "Beleg.png" → "Beleg" – zum Abgleich von Archivkopie und Datenbank-Beleg
 const ohneEndung = (name = "") => name.replace(/\.[^.]+$/, "");
-
-// Warum die KI einen Beleg nicht übernommen hat
-const KI_GRUND = {
-  keine_datei: "Datei nicht abrufbar",
-  kein_pdf:    "keine lesbare PDF-Datei",
-  kein_text:   "Scan ohne Texterkennung",
-  unbekannt:   "Beleg unbekannt",
-};
 
 const TOAST_STIL = {
   success: { icon: "bi-check2",                    stil: { background: "#f0fdf4", border: "1px solid #86efac", color: "#16a34a" } },
@@ -519,64 +510,42 @@ export default function App({ user, onLogout }) {
       }));
 
   /**
-   * KI-Analyse der ausstehenden Belege (simuliert, siehe lib/kiAnalyse.js).
-   * Erkennt die KI einen Beleg, trägt sie alle Daten ein und setzt ihn auf
-   * "zu prüfen" – bestätigt wird er danach im Beleg-Dialog.
+   * KI-Analyse (simuliert, siehe lib/kiAnalyse.js).
+   *
+   * Für die Präsentation gilt der zuletzt hochgeladene offene Beleg des
+   * Mandanten als der vorbereitete: Er bekommt alle Daten eingetragen und
+   * steht danach auf "zu prüfen" – bestätigt wird er im Beleg-Dialog.
+   * Zuletzt hochgeladen = höchste Backend-ID; das Datum kennt keine Uhrzeit.
    */
   const runKiAnalysis = async () => {
     const mandant = currentMandant;
     const pending = docs.filter((d) => d.status === "ausstehend");
     if (!pending.length) { showNotification("Keine ausstehenden Belege.", "error"); return; }
+    const doc = pending.reduce((a, b) => ((b.apiId ?? -1) > (a.apiId ?? -1) ? b : a));
 
     setKiLaeuft(true);
-    pending.forEach((d) => {
-      kiInArbeit.current.add(d.id);
-      aendereBeleg(mandant.id, d.id, { status: "in_bearbeitung", kiLaeuft: true });
-    });
+    kiInArbeit.current.add(doc.id);
+    aendereBeleg(mandant.id, doc.id, { status: "in_bearbeitung", kiLaeuft: true });
 
-    let erkannt = 0;
-    const nichtErkannt = [];
-    for (const doc of pending) {
-      let ergebnis;
-      try {
-        ergebnis = await analysiereBeleg(await ladeBelegDatei(doc, mandant));
-      } catch {
-        ergebnis = { erkannt: false, grund: "keine_datei" };
+    try {
+      const { extractedData, kategorien, confidence } = await analysiereBeleg();
+      if (doc.backendDoc) {
+        await apiFetch(`/documents/${doc.apiId}`, {
+          method: "PATCH",
+          body: updatePayload(extractedData, kategorien, { status: "in_bearbeitung", confidence }),
+        });
       }
-
-      if (ergebnis.erkannt) {
-        const { extractedData, kategorien, confidence } = ergebnis;
-        try {
-          if (doc.backendDoc) {
-            await apiFetch(`/documents/${doc.apiId}`, {
-              method: "PATCH",
-              body: updatePayload(extractedData, kategorien, { status: "in_bearbeitung", confidence }),
-            });
-          }
-          aendereBeleg(mandant.id, doc.id, {
-            status: "in_bearbeitung", kiLaeuft: false, extractedData, kategorien, confidence,
-            amount: extractedData.angerechnetBetrag ?? extractedData.gesamtBetrag,
-          });
-          erkannt++;
-        } catch (e) {
-          aendereBeleg(mandant.id, doc.id, { status: "ausstehend", kiLaeuft: false });
-          nichtErkannt.push(`${doc.name}: Speichern fehlgeschlagen (${e.message})`);
-        }
-      } else {
-        aendereBeleg(mandant.id, doc.id, { status: "ausstehend", kiLaeuft: false });
-        nichtErkannt.push(`${doc.name}: ${KI_GRUND[ergebnis.grund]}`);
-      }
+      aendereBeleg(mandant.id, doc.id, {
+        status: "in_bearbeitung", kiLaeuft: false, extractedData, kategorien, confidence,
+        amount: extractedData.angerechnetBetrag ?? extractedData.gesamtBetrag,
+      });
+      showNotification(`KI-Analyse abgeschlossen – ${doc.name} bitte prüfen ✓`);
+    } catch (e) {
+      aendereBeleg(mandant.id, doc.id, { status: "ausstehend", kiLaeuft: false });
+      showNotification(`KI-Analyse fehlgeschlagen: ${e.message}`, "error");
+    } finally {
       kiInArbeit.current.delete(doc.id);
-    }
-    setKiLaeuft(false);
-
-    if (nichtErkannt.length) console.info("KI-Analyse – nicht erkannt:\n" + nichtErkannt.join("\n"));
-    if (erkannt && !nichtErkannt.length) {
-      showNotification(`KI-Analyse abgeschlossen – ${erkannt} Beleg${erkannt !== 1 ? "e" : ""} bitte prüfen ✓`);
-    } else if (erkannt) {
-      showNotification(`${erkannt} Beleg${erkannt !== 1 ? "e" : ""} analysiert, ${nichtErkannt.length} nicht erkannt`, "info");
-    } else {
-      showNotification(nichtErkannt.length === 1 ? `Nicht erkannt – ${nichtErkannt[0]}` : `${nichtErkannt.length} Belege nicht erkannt`, "error");
+      setKiLaeuft(false);
     }
   };
 
@@ -795,7 +764,7 @@ export default function App({ user, onLogout }) {
               <div>
                 <p style={{ color: "#f0f8ff", fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{kiLaeuft ? "KI-Analyse läuft…" : "KI-Analyse bereit"}</p>
                 <p style={{ color: "#7ab8d0", fontSize: 11 }}>
-                  {kiLaeuft ? "Belege werden gelesen und Daten extrahiert"
+                  {kiLaeuft ? "Beleg wird gelesen und Daten extrahiert"
                             : `${stats.ausstehend} Beleg${stats.ausstehend !== 1 ? "e" : ""} warten auf Klassifizierung`}
                 </p>
               </div>
