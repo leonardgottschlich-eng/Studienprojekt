@@ -16,7 +16,9 @@
 
 const fs   = require("fs");
 const path = require("path");
-const { google } = require("googleapis");
+// googleapis wird bewusst nicht hier oben geladen: Das Paket braucht allein
+// rund zweieinhalb Sekunden und verzögert damit jeden Serverstart – auch wenn
+// nie eine Drive-Anfrage kommt. Es wird beim ersten Zugriff nachgeladen.
 
 const SCHLUESSEL   = path.join(__dirname, "service-account.json");
 const BASIS_NAME   = process.env.DRIVE_ORDNER || "BillSquid";
@@ -30,6 +32,7 @@ const aktiv = () => fs.existsSync(SCHLUESSEL);
 let client = null;
 function drive() {
     if (!client) {
+        const { google } = require("googleapis");
         const auth = new google.auth.GoogleAuth({
             keyFile: SCHLUESSEL,
             scopes: ["https://www.googleapis.com/auth/drive"],

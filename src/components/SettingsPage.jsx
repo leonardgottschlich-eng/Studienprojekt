@@ -207,7 +207,7 @@ export default function SettingsPage({ user, einstellungen, setEinstellungen, sh
     setBusy(false);
   };
 
-  const berater  = benutzer.filter((b) => b.groups?.includes("tax_advisor"));
+  const beraterListe = benutzer.filter((b) => b.groups?.includes("tax_advisor"));
   const mandanten = benutzer.filter((b) => b.groups?.includes("client"));
 
   return (
@@ -338,7 +338,7 @@ export default function SettingsPage({ user, einstellungen, setEinstellungen, sh
                 <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #f0ece4", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <select value={neu.advisor} onChange={(e) => setNeu((p) => ({ ...p, advisor: e.target.value }))} style={{ ...feldStil, cursor: "pointer" }}>
                     <option value="">Steuerberater…</option>
-                    {berater.map((b) => <option key={b.id} value={b.id}>{`${b.first_name} ${b.last_name}`.trim()}</option>)}
+                    {beraterListe.map((b) => <option key={b.id} value={b.id}>{`${b.first_name} ${b.last_name}`.trim()}</option>)}
                   </select>
                   <i className="bi bi-arrow-right" style={{ color: "#9ca3af", fontSize: 11 }} />
                   <select value={neu.client} onChange={(e) => setNeu((p) => ({ ...p, client: e.target.value }))} style={{ ...feldStil, cursor: "pointer" }}>

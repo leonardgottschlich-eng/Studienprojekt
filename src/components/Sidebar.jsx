@@ -1,7 +1,7 @@
 import { useState } from "react";
 import MandantAvatar from "./MandantAvatar";
 
-export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSelectMandant, onClose, user, onLogout, activePage = "belege", onNavigate, zeigeMandantenwechsel = true }) {
+export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSelectMandant, onClose, user, onLogout, activePage = "belege", onNavigate, zeigeMandantenwechsel = true, onMandantAnlegen, laedt = false }) {
     const [search, setSearch] = useState("");
     const [dropdownOpen, setDropdownOpen] = useState(false);
 
@@ -28,16 +28,24 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
                 <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 17, fontWeight: 400, color: "transparent", WebkitTextStroke: "1.2px #fd8f19" }}>Squid</span>
             </button>
 
-            {/* Mandant Switcher – nur für Kanzlei-Rollen, Mandanten sehen nur sich selbst */}
+            {/* Mandant Switcher – nur für Kanzlei-Rollen, Mandanten sehen nur
+                sich selbst. Auch ohne zugewiesenen Mandanten sichtbar, damit
+                der Knopf zum Anlegen erreichbar bleibt. */}
             {zeigeMandantenwechsel && (
             <div style={{ padding: "0 12px 16px", position: "relative" }}>
                 <div style={{ fontSize: 9, fontWeight: 600, color: "#2b5f7a", letterSpacing: ".1em", marginBottom: 7, paddingLeft: 4 }}>MANDANT</div>
                 <button onClick={() => setDropdownOpen((v) => !v)}
                         style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: dropdownOpen ? "rgba(255,255,255,.1)" : "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 8, padding: "8px 10px", cursor: "pointer" }}>
-                    <MandantAvatar m={currentMandant} size={26} />
+                    {currentMandant
+                        ? <MandantAvatar m={currentMandant} size={26} />
+                        : <i className="bi bi-person-dash" style={{ color: "#4a8aaa", fontSize: 18, width: 26, textAlign: "center" }} />}
                     <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
-                        <div style={{ color: "#dff0fb", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{currentMandant.name}</div>
-                        <div style={{ color: "#4a8aaa", fontSize: 10 }}>{currentMandant.nr}</div>
+                        <div style={{ color: "#dff0fb", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {currentMandant?.name ?? (laedt ? "Wird geladen…" : "Kein Mandant")}
+                        </div>
+                        <div style={{ color: "#4a8aaa", fontSize: 10 }}>
+                            {currentMandant?.nr ?? (laedt ? "" : "noch keiner zugewiesen")}
+                        </div>
                     </div>
                     <svg width="11" height="11" viewBox="0 0 11 11" fill="none" style={{ flexShrink: 0, transform: dropdownOpen ? "rotate(180deg)" : "none", transition: "transform .2s", color: "#4a8aaa" }}>
                         <path d="M1.5 3.5l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -54,17 +62,34 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
                             </div>
                         </div>
                         <div style={{ maxHeight: 220, overflowY: "scroll", padding: "3px 0 7px", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain" }}>
+                            {filtered.length === 0 && (
+                                <div style={{ padding: "10px 12px", fontSize: 11.5, color: "#9ca3af" }}>
+                                    {mandanten?.length ? "Kein Treffer." : "Noch kein Mandant vorhanden."}
+                                </div>
+                            )}
                             {filtered.map((m) => (
                                 <button key={m.id} onClick={() => select(m)}
-                                        style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "7px 12px", background: m.id === currentMandant.id ? "#f0f4f8" : "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
+                                        style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "7px 12px", background: m.id === currentMandant?.id ? "#f0f4f8" : "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
                                     <MandantAvatar m={m} size={28} />
                                     <div style={{ flex: 1, minWidth: 0 }}>
-                                        <div style={{ fontSize: 12.5, fontWeight: m.id === currentMandant.id ? 600 : 500, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</div>
+                                        <div style={{ fontSize: 12.5, fontWeight: m.id === currentMandant?.id ? 600 : 500, color: "#111827", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</div>
                                         <div style={{ fontSize: 10.5, color: "#9ca3af" }}>{m.nr}</div>
                                     </div>
                                 </button>
                             ))}
                         </div>
+
+                        {/* Neuen Mandanten anlegen – unter der Liste, damit der
+                            Weg vom Wechseln zum Anlegen kurz ist */}
+                        {onMandantAnlegen && (
+                            <button onClick={() => { setDropdownOpen(false); setSearch(""); onMandantAnlegen(); }}
+                                    style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 12px", borderTop: "1px solid #f0ece4", background: "#fafaf8", border: "none", borderLeft: "none", borderRight: "none", borderBottom: "none", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}>
+                                <span style={{ width: 28, height: 28, borderRadius: "50%", background: "#eef4f8", color: "#18537a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, flexShrink: 0 }}>
+                                    <i className="bi bi-plus-lg" />
+                                </span>
+                                <span style={{ fontSize: 12.5, fontWeight: 600, color: "#18537a" }}>Mandant anlegen</span>
+                            </button>
+                        )}
                     </div>
                 )}
             </div>

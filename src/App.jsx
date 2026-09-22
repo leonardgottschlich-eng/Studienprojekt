@@ -2,13 +2,14 @@ import 'bootstrap-icons/font/bootstrap-icons.css';
 import { useState, useRef, useCallback, useEffect } from "react";
 
 import { MANDANTEN, DOCS_BY_MANDANT } from "./data/mockData";
-import { apiFetch, userToMandant, documentToDoc, updatePayload, dateiZuDataUrl, neuerBelegPayload } from "./api";
-import { filterBelege, vorhandeneKategorien, LEERER_FILTER } from "./utils/belegFilter";
+import { apiFetch, userToMandant, documentToDoc, updatePayload, dateiZuDataUrl, neuerBelegPayload, exportiereBelegeAlsZip, fehlerText } from "./api";
+import { filterBelege, vorhandeneKategorien, datumFuer, iso, LEERER_FILTER } from "./utils/belegFilter";
 import { bereinigeKategorien } from "./data/kategorien";
 import { lokalFetch } from "./localServer";
 import { analysiereBeleg } from "./lib/kiAnalyse";
+import { speichereBlob } from "./lib/belegDatei";
 import { bildZuPdfDatei, alsPdfName } from "./lib/jpegZuPdf";
-import { ladeEinstellungen, speichereEinstellungen, ladeLetztenMandanten, merkeMandanten, ladeLetzteSeite, merkeSeite } from "./settings";
+import { ladeEinstellungen, speichereEinstellungen, ladeLetztenMandanten, merkeMandanten, ladeLetzteSeite, merkeSeite, ladeKiBelege, merkeKiBeleg } from "./settings";
 import { useUpload } from "./hooks/useUpload";
 import MandantAvatar from "./components/MandantAvatar";
 import FileIcon from "./components/FileIcon";
@@ -25,6 +26,7 @@ import SettingsPage from "./components/SettingsPage";
 import KategorieChips from "./components/KategorieChips";
 import DashboardBerater from "./components/DashboardBerater";
 import DashboardMandant from "./components/DashboardMandant";
+import MandantAnlegenModal from "./components/MandantAnlegenModal";
 import StatTile from "./components/StatTile";
 
 /**
@@ -50,6 +52,21 @@ const startSeite = () => {
 // "Beleg.png" → "Beleg" – zum Abgleich von Archivkopie und Datenbank-Beleg
 const ohneEndung = (name = "") => name.replace(/\.[^.]+$/, "");
 
+// "2026-09-22" → "22.09.2026"
+const deutschesDatum = (iso) => String(iso).split("-").reverse().join(".");
+
+// Die Fehlerfälle des Export-Endpunkts (siehe frontend-api.pdf)
+const EXPORT_FEHLER = {
+  403: () => "Für diesen Mandanten dürfen Sie nicht exportieren.",
+  404: (spanne) => `Im Zeitraum ${spanne} liegen keine Belege.`,
+  413: () => "Zu viele oder zu große Belege – höchstens 500 PDFs und 100 MB. Bitte den Zeitraum verkleinern.",
+};
+
+// Warum die simulierte KI einen Beleg nicht erkannt hat
+const KI_GRUND = {
+  nicht_vorbereitet: "nicht erkannt – erkannt werden nur Belege, die über Google Drive hereinkommen",
+};
+
 const TOAST_STIL = {
   success: { icon: "bi-check2",                    stil: { background: "#f0fdf4", border: "1px solid #86efac", color: "#16a34a" } },
   error:   { icon: "bi-exclamation-triangle-fill", stil: { background: "#fef2f2", border: "1px solid #fca5a5", color: "#dc2626" } },
@@ -61,9 +78,13 @@ export default function App({ user, onLogout }) {
 
   const [seite, setSeite]             = useState(startSeite);
   const [zuordnungUnbekannt, setZuordnungUnbekannt] = useState(false);
-  const [allDocs, setAllDocs]         = useState({ ...DOCS_BY_MANDANT });
-  const [mandanten, setMandanten]     = useState(MANDANTEN);
-  const [currentMandant, setCurrentMandant] = useState(MANDANTEN[0]);
+  // Leer starten: Die Demo-Daten aus mockData sind nur die Rückfallebene, wenn
+  // das Backend nicht erreichbar ist. Stünden sie hier, blitzten sie bei jeder
+  // Anmeldung kurz auf, bevor die echten Daten da sind.
+  const [allDocs, setAllDocs]         = useState({});
+  const [mandanten, setMandanten]     = useState([]);
+  const [currentMandant, setCurrentMandant] = useState(null);
+  const [laedtMandanten, setLaedtMandanten] = useState(true);
   const [dragging, setDragging]       = useState(false);
   const [filter, setFilter]           = useState({ ...LEERER_FILTER });
   const [einstellungen, setEinstellungen] = useState(ladeEinstellungen);
@@ -75,6 +96,10 @@ export default function App({ user, onLogout }) {
   // Über den Stift geöffnete Belege starten gleich im Bearbeitungsmodus
   const [bearbeitenDirekt, setBearbeitenDirekt] = useState(false);
   const [scanInbox, setScanInbox]     = useState([]);
+  // Wann der Eingang zuletzt abgefragt wurde und ob beide Quellen antworteten
+  const [inboxStand, setInboxStand]   = useState(null);
+  const [mandantAnlegenOffen, setMandantAnlegenOffen] = useState(false);
+  const [exportLaeuft, setExportLaeuft] = useState(false);
   const fileInputRef = useRef(null);
   // Belege, die die KI gerade analysiert (ids) – schützt sie davor, dass das
   // regelmäßige Neuladen sie zwischendurch wieder als "ausstehend" zeigt
@@ -140,6 +165,12 @@ export default function App({ user, onLogout }) {
     oeffneDialog();
   };
   const oeffneKamera = () => {
+    // Der Kamera-Knopf steht immer oben – ohne Mandant wüsste der Scan aber
+    // nicht, wohin er gehört
+    if (!currentMandant) {
+      showNotification("Kein Mandant zugewiesen – der Scan hätte kein Ziel.", "info");
+      return;
+    }
     setCameraOpen(true);
     oeffneDialog();
   };
@@ -190,6 +221,14 @@ export default function App({ user, onLogout }) {
   //   tax_advisor  – die zugewiesenen (Tabelle advisor_clients)
   //   admin        – alle
   const ladeMandanten = useCallback(async () => {
+    // Auf Wunsch beim zuletzt gewählten Mandanten weitermachen – sonst beim
+    // ersten der Liste. Gilt für beide Rollen, damit ein Neuladen nicht
+    // ungefragt den Mandanten wechselt.
+    const starteBeiMandant = (liste) => {
+      const gemerkt = einstellungen.mandantMerken ? ladeLetztenMandanten() : null;
+      setCurrentMandant(liste.find((m) => m.id === gemerkt) ?? liste[0] ?? null);
+    };
+
     try {
       const { data } = await apiFetch("/users");
       const alleClients = (data || [])
@@ -202,37 +241,39 @@ export default function App({ user, onLogout }) {
         const eigener = alleClients.filter((m) => m.id === user.id);
         const liste = eigener.length ? eigener : [userToMandant(user, 0)];
         setMandanten(liste);
-        // Auf Wunsch beim zuletzt gewählten Mandanten weitermachen
-        const gemerkt = einstellungen.mandantMerken ? ladeLetztenMandanten() : null;
-        setCurrentMandant(liste.find((m) => m.id === gemerkt) ?? liste[0]);
+        starteBeiMandant(liste);
         setAllDocs({});
         return;
       }
 
-      if (!alleClients.length) return;
+      // Backend antwortet, kennt aber keine Mandanten – dann gibt es eben keine
+      if (!alleClients.length) { setMandanten([]); setCurrentMandant(null); return; }
 
-      // Steuerberater:in – auf die aktiv zugewiesenen Mandanten einschränken.
-      // Gibt es keine Zuordnung (oder liefert der Endpunkt nichts), bleiben
-      // alle Mandanten sichtbar; das Dashboard weist darauf hin.
+      // Steuerberater:in sieht ausschließlich die aktiv zugewiesenen Mandanten
+      // (Tabelle advisor_clients) – ist keiner zugewiesen, eben keinen.
+      //
+      // Einzige Ausnahme: Lässt sich die Zuordnung nicht abrufen, ist unklar,
+      // wer zu wem gehört. Dann bleiben alle sichtbar und das Dashboard weist
+      // darauf hin – besser als jemanden versehentlich auszusperren.
       let liste = alleClients;
       if (user?.groups?.includes("tax_advisor")) {
-        let zugewiesen = null;
         try {
           const { data: links } = await apiFetch("/advisor-clients");
-          zugewiesen = new Set(
+          const zugewiesen = new Set(
               (links || [])
                   .filter((l) => l.status === "active" && l.advisor_user_id === user.id)
                   .map((l) => l.client_user_id)
           );
+          liste = alleClients.filter((m) => zugewiesen.has(m.id));
+          setZuordnungUnbekannt(false);
         } catch {
           console.warn("advisor-clients nicht abrufbar – es werden alle Mandanten angezeigt.");
+          setZuordnungUnbekannt(true);
         }
-        if (zugewiesen?.size) liste = alleClients.filter((m) => zugewiesen.has(m.id));
-        else setZuordnungUnbekannt(true);
       }
 
       setMandanten(liste);
-      setCurrentMandant(liste[0]);
+      starteBeiMandant(liste);
       setAllDocs({});
 
       // In Google Drive die Ablage vorbereiten: _Unzugeordnet und je Mandant
@@ -243,7 +284,14 @@ export default function App({ user, onLogout }) {
         body: JSON.stringify({ mandanten: liste.map((m) => ({ nr: m.nr, name: m.name })) }),
       }).catch(() => { /* Drive optional */ });
     } catch {
+      // Ohne Backend läuft die App im Demo-Modus weiter – erst hier kommen die
+      // Mock-Daten ins Spiel, nicht schon beim ersten Rendern
       console.warn("Backend nicht erreichbar – Demo-Modus mit Mock-Daten.");
+      setMandanten(MANDANTEN);
+      setAllDocs({ ...DOCS_BY_MANDANT });
+      starteBeiMandant(MANDANTEN);
+    } finally {
+      setLaedtMandanten(false);
     }
   }, [istMandant, user, einstellungen.mandantMerken]);
 
@@ -314,6 +362,8 @@ export default function App({ user, onLogout }) {
   // Mandanten kann sich der Mandant ändern, ohne dass die id wechselt
   // (Mock-Ids und Datenbank-Ids überschneiden sich)
   useEffect(() => {
+    // Ohne zugewiesenen Mandanten gibt es nichts zu laden
+    if (!currentMandant) return;
     loadBackendDocs(currentMandant);
     loadServerDocs(currentMandant);
   }, [currentMandant, loadBackendDocs, loadServerDocs]);
@@ -324,25 +374,28 @@ export default function App({ user, onLogout }) {
   // Ein angemeldeter Mandant sieht nur die eigenen Scans (der Server filtert
   // danach); der Drive-Ordner gehört zum Kanzlei-Scanner und bleibt außen vor.
   const fetchInbox = useCallback(async () => {
+    // null = Abruf gescheitert, [] = erreichbar, aber leer. Der Unterschied
+    // wird angezeigt – sonst sähe "Drive gerade weg" aus wie "nichts Neues".
     const holeListe = async (pfad) => {
       try {
         const res = await lokalFetch(pfad);
-        if (!res.ok) return [];
+        if (!res.ok) return null;
         const { files } = await res.json();
         return files || [];
-      } catch { return []; }
+      } catch { return null; }
     };
 
-    const nurEigene = istMandant ? `?mandantNr=${encodeURIComponent(currentMandant.nr)}` : "";
+    const nurEigene = istMandant ? `?mandantNr=${encodeURIComponent(currentMandant?.nr ?? "")}` : "";
     const [lokal, drive] = await Promise.all([
       holeListe(`/api/scan/inbox${nurEigene}`),
       istMandant ? [] : holeListe("/api/drive/inbox"),
     ]);
     setScanInbox([
-      ...lokal.map((f) => ({ ...f, quelle: "lokal" })),
-      ...drive,
+      ...(lokal ?? []).map((f) => ({ ...f, quelle: "lokal" })),
+      ...(drive ?? []),
     ]);
-  }, [istMandant, currentMandant.nr]);
+    setInboxStand({ zeit: new Date(), lokalFehler: lokal === null, driveFehler: drive === null });
+  }, [istMandant, currentMandant?.nr]);
 
   // Regelmäßig nachsehen (alle 10 s) – automatisch zugeordnete Scans
   // erscheinen dabei über loadServerDocs direkt in der Belegliste.
@@ -351,6 +404,7 @@ export default function App({ user, onLogout }) {
     if (!einstellungen.autoAktualisieren) return;
     const timer = setInterval(() => {
       fetchInbox();
+      if (!currentMandant) return;
       loadServerDocs(currentMandant);
       loadBackendDocs(currentMandant);
     }, Math.max(5, einstellungen.intervallSekunden) * 1000);
@@ -384,6 +438,27 @@ export default function App({ user, onLogout }) {
   };
 
   /**
+   * Scan aus dem Eingang entfernen. Er wird nicht gelöscht, sondern in den
+   * Ordner _Verworfen verschoben (lokal bzw. in Google Drive) – von dort lässt
+   * er sich von Hand zurückholen, falls er doch gebraucht wird.
+   */
+  const verwerfeScan = async (datei) => {
+    const ausDrive = datei.quelle === "drive";
+    try {
+      const res = await lokalFetch(ausDrive ? "/api/drive/verwerfen" : "/api/scan/verwerfen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ausDrive ? { fileId: datei.id } : { fileName: datei.name }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+      setScanInbox((prev) => prev.filter((f) => (ausDrive ? f.id !== datei.id : f.name !== datei.name)));
+      showNotification(`${datei.name} entfernt – liegt in „_Verworfen"`, "info");
+    } catch (e) {
+      showNotification(`Entfernen fehlgeschlagen: ${e.message}`, "error");
+    }
+  };
+
+  /**
    * Scan benennen, einem Mandanten zuordnen und als Beleg ins Backend übernehmen.
    * Das Original wandert zusätzlich in den Mandantenordner des Scan-Servers und
    * bleibt dort als lokales Archiv liegen.
@@ -411,7 +486,7 @@ export default function App({ user, onLogout }) {
       if (!inhalt.ok) throw new Error("Scan konnte nicht gelesen werden.");
       const original = await inhalt.blob();
       const pdf = istPdf ? original : await bildZuPdfDatei(original, alsPdfName(zielName));
-      await apiFetch("/documents", {
+      const { data: angelegt } = await apiFetch("/documents", {
         method: "POST",
         body: neuerBelegPayload({
           mandant,
@@ -419,6 +494,10 @@ export default function App({ user, onLogout }) {
           dataUrl: await dateiZuDataUrl(pdf),
         }),
       });
+
+      // Belege über Google Drive gelten als der vorbereitete Beleg – nur sie
+      // erkennt die simulierte KI (siehe lib/kiAnalyse.js)
+      if (ausDrive && angelegt?.id) merkeKiBeleg(`api_${angelegt.id}`);
 
       // 2. Original einsortieren: in Drive verschieben bzw. lokal umlegen
       const res = ausDrive
@@ -512,10 +591,11 @@ export default function App({ user, onLogout }) {
   /**
    * KI-Analyse (simuliert, siehe lib/kiAnalyse.js).
    *
-   * Für die Präsentation gilt der zuletzt hochgeladene offene Beleg des
-   * Mandanten als der vorbereitete: Er bekommt alle Daten eingetragen und
-   * steht danach auf "zu prüfen" – bestätigt wird er im Beleg-Dialog.
-   * Zuletzt hochgeladen = höchste Backend-ID; das Datum kennt keine Uhrzeit.
+   * Analysiert wird der zuletzt hochgeladene offene Beleg des Mandanten
+   * (höchste Backend-ID; das Datum kennt keine Uhrzeit). Erkannt wird er nur,
+   * wenn er über Google Drive hereinkam – das ist für die Vorführung der
+   * vorbereitete Weg. Er bekommt dann alle Daten eingetragen und steht auf
+   * "zu prüfen"; bestätigt wird er im Beleg-Dialog.
    */
   const runKiAnalysis = async () => {
     const mandant = currentMandant;
@@ -528,7 +608,17 @@ export default function App({ user, onLogout }) {
     aendereBeleg(mandant.id, doc.id, { status: "in_bearbeitung", kiLaeuft: true });
 
     try {
-      const { extractedData, kategorien, confidence } = await analysiereBeleg();
+      const ergebnis = await analysiereBeleg(ladeKiBelege().includes(doc.id));
+
+      // Nur der vorbereitete Beleg wird erkannt – alle anderen bleiben
+      // unverändert stehen, statt fremde Daten zu bekommen
+      if (!ergebnis.erkannt) {
+        aendereBeleg(mandant.id, doc.id, { status: "ausstehend", kiLaeuft: false });
+        showNotification(`${doc.name}: ${KI_GRUND[ergebnis.grund] ?? "nicht erkannt"}`, "info");
+        return;
+      }
+
+      const { extractedData, kategorien, confidence } = ergebnis;
       if (doc.backendDoc) {
         await apiFetch(`/documents/${doc.apiId}`, {
           method: "PATCH",
@@ -552,13 +642,19 @@ export default function App({ user, onLogout }) {
   const handleConfirm = async (docId, editedData, kategorien = []) => {
     const doc = (allDocs[currentMandant.id] || []).find((d) => d.id === docId);
 
+    // "Analysiert" heißt geprüft – das setzt voraus, dass die KI schon Daten
+    // geliefert hat. Bei einem Beleg, über den sie noch nicht gelaufen ist,
+    // werden die Eingaben zwar gespeichert, er bleibt aber ausstehend.
+    const nochNichtAnalysiert = doc?.status === "ausstehend";
+    const neuerStatus = nochNichtAnalysiert ? "ausstehend" : "analysiert";
+
     // Backend-Belege: bestätigte Daten in die Datenbank schreiben
     if (doc?.backendDoc) {
       try {
         await apiFetch(`/documents/${doc.apiId}`, {
           method: "PATCH",
           // Die Sicherheit der KI bleibt beim Bestätigen erhalten
-          body: updatePayload(editedData, kategorien, { confidence: doc.confidence }),
+          body: updatePayload(editedData, kategorien, { status: neuerStatus, confidence: doc.confidence }),
         });
       } catch (e) {
         showNotification(`Speichern im Backend fehlgeschlagen: ${e.message}`, "error");
@@ -566,23 +662,53 @@ export default function App({ user, onLogout }) {
       }
     }
 
-    setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map(d => d.id === docId ? { ...d, status: "analysiert", extractedData: editedData, kategorien: bereinigeKategorien(kategorien), amount: editedData.angerechnetBetrag ?? editedData.gesamtBetrag } : d) }));
+    setAllDocs(prev => ({ ...prev, [currentMandant.id]: (prev[currentMandant.id] || []).map(d => d.id === docId ? { ...d, status: neuerStatus, extractedData: editedData, kategorien: bereinigeKategorien(kategorien), amount: editedData.angerechnetBetrag ?? editedData.gesamtBetrag } : d) }));
     schliesseDialog();
-    showNotification("Beleg bestätigt und gespeichert ✓");
+    showNotification(nochNichtAnalysiert
+        ? "Beleg gespeichert – bleibt ausstehend, bis die KI darüber gelaufen ist"
+        : "Beleg bestätigt und gespeichert ✓", nochNichtAnalysiert ? "info" : "success");
   };
 
   /**
-   * Export der angezeigten Belege.
+   * Zeitraum für den Export.
    *
-   * TODO: Hier die eigentliche Logik einsetzen. Zur Verfügung stehen:
-   *   filteredDocs   – die Belege, die gerade in der Liste stehen
-   *   currentMandant – der gewählte Mandant (Name und Nummer)
-   *   filter         – Suchbegriff, Zeitraum, Status und Klassifikation
-   * Denkbar wären z. B. eine CSV-Datei, ein DATEV-Export oder ein ZIP
-   * mit den Originaldateien.
+   * Das Backend verlangt ein Von und ein Bis. Ist im Filter ein Zeitraum
+   * gesetzt, gilt der; sonst wird er aus den angezeigten Belegen abgeleitet,
+   * damit das Archiv mindestens das enthält, was gerade in der Liste steht.
    */
-  const exportiereBelege = () => {
-    showNotification(`Export von ${filteredDocs.length} Beleg${filteredDocs.length !== 1 ? "en" : ""} die Logik folgt noch.`, "info");
+  const exportZeitraum = () => {
+    const tage = filteredDocs.map((d) => datumFuer(d, filter.bezug)).filter(Boolean).sort((a, b) => a - b);
+    if (!tage.length) return null;
+    return {
+      von: filter.von || iso(tage[0]),
+      bis: filter.bis || iso(tage[tage.length - 1]),
+    };
+  };
+
+  /**
+   * Belege des Mandanten als ZIP herunterladen.
+   *
+   * Der Endpunkt kennt nur Mandant und Belegdatum – Suchbegriff, Status und
+   * Klassifikation wirken darauf nicht. Das Archiv kann also mehr enthalten
+   * als die Liste gerade zeigt; die Meldung nennt deshalb den Zeitraum.
+   */
+  const exportiereBelege = async () => {
+    if (!currentMandant) return;
+    const zeitraum = exportZeitraum();
+    if (!zeitraum) { showNotification("Keine Belege zum Exportieren.", "error"); return; }
+
+    const spanne = `${deutschesDatum(zeitraum.von)} – ${deutschesDatum(zeitraum.bis)}`;
+    setExportLaeuft(true);
+    showNotification(`Export wird vorbereitet (${spanne})…`, "info");
+
+    try {
+      const { blob, dateiName } = await exportiereBelegeAlsZip({ mandantId: currentMandant.id, ...zeitraum });
+      speichereBlob(blob, dateiName);
+      showNotification(`Belege ${spanne} als ZIP gespeichert ✓`);
+    } catch (e) {
+      showNotification(EXPORT_FEHLER[e.status]?.(spanne) ?? `Export fehlgeschlagen: ${fehlerText(e)}`, "error");
+    }
+    setExportLaeuft(false);
   };
 
   const handleDiscard = async (doc) => {
@@ -614,7 +740,7 @@ export default function App({ user, onLogout }) {
     showNotification("Beleg gelöscht", "error");
   };
 
-  const docs = allDocs[currentMandant.id] || [];
+  const docs = (currentMandant && allDocs[currentMandant.id]) || [];
   const filteredDocs = filterBelege(docs, filter);
   const stats = {
     total:      docs.length,
@@ -665,12 +791,22 @@ export default function App({ user, onLogout }) {
       `}</style>
 
         {/* Modals */}
+        {mandantAnlegenOffen && (
+            <MandantAnlegenModal
+                istBerater={user?.groups?.includes("tax_advisor")}
+                beraterId={user?.id}
+                isMobile={isMobile}
+                showNotification={showNotification}
+                onAngelegt={ladeMandanten}
+                onClose={() => setMandantAnlegenOffen(false)} />
+        )}
         {cameraOpen && <DocumentScanModal onClose={schliesseDialog}
                                           onCapture={(file) => zeigeScannerEingang ? scanInEingang(file) : uploadToLocal([file])} />}
         {selectedDoc && <DocDetailModal key={selectedDoc.id} doc={selectedDoc} mandant={currentMandant} isMobile={isMobile}
                                         startImBearbeiten={bearbeitenDirekt}
                                         onClose={schliesseDialog}
                                         onRename={renameDoc}
+                                        showNotification={showNotification}
                                         onConfirm={(ed, kats) => handleConfirm(selectedDoc.id, ed, kats)}
                                         onDiscard={() => handleDiscard(selectedDoc)} />}
 
@@ -681,13 +817,37 @@ export default function App({ user, onLogout }) {
         <MobileTopbar onMenuClick={() => setSidebarOpen((v) => !v)} onCameraClick={oeffneKamera} onLogoClick={() => navigiere("dashboard")} />
 
         {/* Sidebar */}
-        <Sidebar currentMandant={currentMandant} mandanten={mandanten} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} activePage={seite} onNavigate={navigiere} zeigeMandantenwechsel={!istMandant} />
+        <Sidebar currentMandant={currentMandant} mandanten={mandanten} sidebarOpen={sidebarOpen} onSelectMandant={selectMandant} onClose={() => setSidebarOpen(false)} user={user} onLogout={handleLogout} activePage={seite} onNavigate={navigiere} zeigeMandantenwechsel={!istMandant}
+                 onMandantAnlegen={istMandant ? undefined : () => { setSidebarOpen(false); setMandantAnlegenOffen(true); }}
+                 laedt={laedtMandanten} />
 
         {/* Main */}
         <main className="main-content" style={{ marginLeft: 240, flex: 1, minWidth: 0, padding: isMobile ? "90px 16px 84px" : "30px 32px", animation: "fadeUp .4s ease", display: "flex", justifyContent: "center", background: "#f8f7f4" }}>
           {seite === "einstellungen" ? (
               <SettingsPage user={user} einstellungen={einstellungen} setEinstellungen={setEinstellungen}
                             showNotification={showNotification} isMobile={isMobile} />
+          ) : laedtMandanten ? (
+              /* Erster Abruf läuft – weder Demo-Daten noch "keine Mandanten"
+                 zeigen, beides wäre für einen Moment schlicht falsch */
+              <div style={{ alignSelf: "center", display: "flex", alignItems: "center", gap: 10, color: "#9ca3af", fontSize: 13, animation: "pulse 1.2s infinite" }}>
+                <i className="bi bi-hourglass-split" style={{ fontSize: 16 }} />
+                Mandanten werden geladen…
+              </div>
+          ) : !currentMandant ? (
+              /* Steuerberater:in ohne zugewiesene Mandanten – ohne Mandant
+                 gibt es weder Belege noch einen Upload, der irgendwo landet */
+              <div style={{ width: "100%", maxWidth: 560, alignSelf: "center", background: "#fff", border: "1px solid #e8e4dc", borderRadius: 12, padding: "36px 28px", textAlign: "center" }}>
+                <i className="bi bi-people" style={{ fontSize: 30, color: "#9ca3af", display: "block", marginBottom: 12 }} />
+                <h2 style={{ fontSize: 16, fontWeight: 600, color: "#0b2e44", marginBottom: 8 }}>Keine Mandanten zugewiesen</h2>
+                <p style={{ fontSize: 13, color: "#6b7280", lineHeight: 1.6 }}>
+                  Ihnen ist derzeit kein Mandant zugeordnet, deshalb gibt es hier nichts anzuzeigen.
+                  Legen Sie einen an – bestehende Mandanten ordnet ein Administrator zu.
+                </p>
+                <button onClick={() => setMandantAnlegenOffen(true)}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 7, marginTop: 16, padding: "9px 18px", background: "#18537a", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 600, color: "#fff", cursor: "pointer", fontFamily: "inherit" }}>
+                  <i className="bi bi-person-plus" /> Mandant anlegen
+                </button>
+              </div>
           ) : (
           <div style={{ width: "100%", maxWidth: 900 }}>
 
@@ -736,7 +896,9 @@ export default function App({ user, onLogout }) {
             {/* Scanner-Eingang: unzugeordnete Scans benennen und zuordnen.
                 Nur für Kanzlei-Rollen und nur, wenn in den Einstellungen gewünscht. */}
             {zeigeScannerEingang && (
-                <ScannerInbox files={scanInbox} mandanten={mandanten} onAssign={assignScan} />
+                <ScannerInbox files={scanInbox} mandanten={mandanten} onAssign={assignScan}
+                              onVerwerfen={verwerfeScan}
+                              stand={inboxStand} onAktualisieren={fetchInbox} />
             )}
 
             {/* Upload Zone */}
@@ -777,6 +939,7 @@ export default function App({ user, onLogout }) {
             {/* Doc Table */}
             <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e8e4dc", overflow: "hidden" }}>
               <BelegSuche filter={filter} onChange={setFilter} kategorien={vorhandeneKategorien(docs)} onExport={exportiereBelege}
+                          exportLaeuft={exportLaeuft}
                           anzahl={filteredDocs.length} gesamt={docs.length} isMobile={isMobile} />
               {/* Spaltenköpfe nur am Schreibtisch – am Handy stehen die Angaben
                   je Beleg untereinander statt in sechs Spalten */}
@@ -791,6 +954,7 @@ export default function App({ user, onLogout }) {
                   docs={filteredDocs}
                   isMobile={isMobile}
                   query={filter.query}
+                  datumBezug={filter.bezug}
                   onOpen={(doc) => oeffneBeleg(doc)}
                   onEdit={(doc) => oeffneBeleg(doc, true)}
                   leerAnzeige={

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import FileIcon from './FileIcon';
 import StatusBadge from './StatusBadge';
 import { KATEGORIEN, kategorienVon, bereinigeKategorien } from '../data/kategorien';
-import { ladeBelegDatei } from '../lib/belegDatei';
+import { ladeBelegDatei, ladeBelegHerunter } from '../lib/belegDatei';
 import { oeffnePdf } from '../lib/pdfjs';
 
 /* Leeres Datengerüst für Belege ohne KI-Extraktion (hochgeladene/gescannte
@@ -345,8 +345,25 @@ const teileName = (name) => {
   return i > 0 ? [name.slice(0, i), name.slice(i)] : [name, ""];
 };
 
-export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeiten, onClose, onRename, onConfirm, onDiscard }) {
+export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeiten, onClose, onRename, onConfirm, onDiscard, showNotification }) {
   const [editMode, setEditMode] = useState(!!startImBearbeiten);
+  const [laedtDownload, setLaedtDownload] = useState(false);
+
+  // Demo-Belege aus den Mock-Daten haben keine hinterlegte Datei
+  const hatDatei = !!(doc.backendDoc || (doc.serverFile && mandant));
+
+  // Über diesen Beleg ist die KI noch nicht gelaufen
+  const nochNichtAnalysiert = doc.status === "ausstehend";
+
+  const herunterladen = async () => {
+    setLaedtDownload(true);
+    try {
+      await ladeBelegHerunter(doc, mandant);
+    } catch (e) {
+      showNotification?.(`Herunterladen fehlgeschlagen: ${e.message}`, "error");
+    }
+    setLaedtDownload(false);
+  };
   // Dateiname ohne Endung – die Endung bleibt beim Umbenennen unverändert
   const [nameEntwurf, setNameEntwurf] = useState(() => teileName(doc.name)[0]);
   const [edited, setEdited] = useState({ ...LEERE_DATEN, ...doc.extractedData });
@@ -468,6 +485,15 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
               </div>
               {!isMobile && <StatusBadge status={doc.status} />}
             </div>
+            {/* Herunterladen – nur bei Belegen, zu denen es wirklich eine
+                Datei gibt (Demo-Belege haben keine) */}
+            {hatDatei && (
+                <button onClick={herunterladen} disabled={laedtDownload}
+                        title={`${doc.name} herunterladen`}
+                        style={{ background: "#f3f4f6", border: "none", borderRadius: 8, width: 32, height: 32, flexShrink: 0, cursor: laedtDownload ? "default" : "pointer", fontSize: 15, color: laedtDownload ? "#d1d5db" : "#6b7280", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <i className={laedtDownload ? "bi bi-hourglass" : "bi bi-download"} />
+                </button>
+            )}
             <button onClick={onClose} style={{ background: "#f3f4f6", border: "none", borderRadius: 8, width: 32, height: 32, flexShrink: 0, cursor: "pointer", fontSize: 16, color: "#6b7280", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <i className="bi bi-x" />
             </button>
@@ -482,7 +508,7 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
                 selbst entgegen, nur daneben lässt sich die Ansicht scrollen. */}
             <div style={{ width: isMobile ? "100%" : "42%", flexShrink: 0, background: "#f5f3ef", borderRight: isMobile ? "none" : "1px solid #ede9e0", borderBottom: isMobile ? "1px solid #ede9e0" : "none", overflowY: isMobile ? "visible" : "auto", padding: isMobile ? "16px 34px 28px" : 20 }}>
               <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", letterSpacing: ".08em", marginBottom: 12 }}>ORIGINALDOKUMENT</div>
-              {(doc.backendDoc || (doc.serverFile && mandant)) ? <ServerFilePreview doc={doc} mandant={mandant} isMobile={isMobile} /> : <ScanPreview doc={doc} />}
+              {hatDatei ? <ServerFilePreview doc={doc} mandant={mandant} isMobile={isMobile} /> : <ScanPreview doc={doc} />}
             </div>
 
             {/* Belegdaten */}
@@ -734,11 +760,16 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
                   </button>
               )}
 
-              {/* Bestätigen */}
+              {/* Bestätigen – solange die KI nicht gelaufen ist, wird hier nur
+                  gespeichert, der Beleg bleibt ausstehend. Der Knopf heißt
+                  dann auch so, statt etwas anderes zu versprechen. */}
               {!editMode && (
                   <button onClick={() => onConfirm(withFlags(ed), kategorien)}
-                          style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: isMobile ? 1 : undefined, gap: 6, padding: "9px 20px", background: "linear-gradient(135deg,#16a34a,#22c55e)", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer", boxShadow: "0 2px 8px rgba(22,163,74,.3)" }}>
-                    <i className="bi bi-check2-circle" /> Bestätigen
+                          title={nochNichtAnalysiert
+                              ? "Eingaben speichern – geprüft wird der Beleg erst nach der KI-Analyse"
+                              : "Beleg als geprüft bestätigen"}
+                          style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: isMobile ? 1 : undefined, gap: 6, padding: "9px 20px", background: nochNichtAnalysiert ? "#18537a" : "linear-gradient(135deg,#16a34a,#22c55e)", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer", boxShadow: nochNichtAnalysiert ? "none" : "0 2px 8px rgba(22,163,74,.3)" }}>
+                    <i className={nochNichtAnalysiert ? "bi bi-floppy" : "bi bi-check2-circle"} /> {nochNichtAnalysiert ? "Speichern" : "Bestätigen"}
                   </button>
               )}
             </div>

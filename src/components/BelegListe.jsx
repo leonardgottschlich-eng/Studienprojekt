@@ -1,7 +1,7 @@
 import FileIcon from "./FileIcon";
 import StatusBadge from "./StatusBadge";
 import KategorieChips from "./KategorieChips";
-import { trefferFeld } from "../utils/belegFilter";
+import { trefferFeld, anzeigeDatum } from "../utils/belegFilter";
 
 /**
  * Belegliste – am Schreibtisch eine Tabelle, am Handy eine Karte je Beleg.
@@ -14,8 +14,14 @@ import { trefferFeld } from "../utils/belegFilter";
 
 const SPALTEN = "2.5fr 1fr 1fr 1fr 1fr 60px";
 
-export default function BelegListe({ docs, isMobile, query, onOpen, onEdit, leerAnzeige }) {
+export default function BelegListe({ docs, isMobile, query, datumBezug = "beleg", onOpen, onEdit, leerAnzeige }) {
   if (!docs.length) return leerAnzeige;
+
+  // Gezeigt wird das Belegdatum; erst wenn keins erfasst ist, das Upload-Datum.
+  // Über den Filter lässt sich auf das Upload-Datum umstellen.
+  const datum = (doc) => anzeigeDatum(doc, datumBezug);
+  const datumTitel = (doc) =>
+      datumBezug === "upload" || !doc.extractedData?.datum ? "Upload-Datum" : "Belegdatum";
 
   const StiftKnopf = ({ doc }) => (
       <button title="Beleg bearbeiten"
@@ -38,7 +44,7 @@ export default function BelegListe({ docs, isMobile, query, onOpen, onEdit, leer
                 {doc.name}
               </div>
               <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 1 }}>
-                {doc.uploadedAt} · {doc.size}
+                <span title={datumTitel(doc)}>{datum(doc)}</span> · {doc.size}
                 {treffer && <span style={{ color: "#b45309" }}> · {treffer.label}: {treffer.wert}</span>}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
@@ -78,7 +84,7 @@ export default function BelegListe({ docs, isMobile, query, onOpen, onEdit, leer
             </div>
             <StiftKnopf doc={doc} />
           </div>
-          <span style={{ fontSize: 12, color: "#6b7280" }}>{doc.uploadedAt}</span>
+          <span style={{ fontSize: 12, color: "#6b7280" }} title={datumTitel(doc)}>{datum(doc)}</span>
           <KategorieChips doc={doc} />
           <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{doc.amount}</span>
           <StatusBadge status={doc.status} kiLaeuft={doc.kiLaeuft} />

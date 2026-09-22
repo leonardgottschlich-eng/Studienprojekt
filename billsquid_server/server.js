@@ -1,4 +1,4 @@
-/**
+﻿/**
  * BillSquid – Lokaler Scan-Server (Port 3001)
  *
  * Arbeitsteilung: Benutzer, Mandanten und Belegdaten liegen im Backend
@@ -23,8 +23,10 @@ const path     = require("path");
 const jwt      = require("jsonwebtoken");
 const bcrypt   = require("bcryptjs");
 const chokidar = require("chokidar");
-const { PDFParse } = require("pdf-parse");
 const gdrive   = require("./drive");
+// pdf-parse kostet beim Laden rund 200 ms und wird nur gebraucht, wenn ein
+// PDF im Scanner-Eingang auf einen Mandanten untersucht wird – deshalb erst
+// dann (siehe resolveMandantFromPdf).
 
 const app  = express();
 const PORT = 3001;
@@ -78,12 +80,27 @@ const MANDANTEN = [
 const BASE_PATH = process.env.BELEGE_PFAD || path.join(__dirname, "..", "..", "Belege");
 fs.mkdirSync(BASE_PATH, { recursive: true });
 
+// Aus dem Eingang verworfene Scans – lokal wie in Google Drive. Sie werden
+// verschoben statt gelöscht: Bei steuerlich relevanten Belegen wäre
+// endgültiges Löschen per Klick zu riskant, und in Drive darf das Dienstkonto
+// fremde Dateien ohnehin nur verschieben, nicht löschen.
+const VERWORFEN_NAME = "_Verworfen";
+
 // Ordnernamen von pfad-gefährlichen Zeichen befreien (kein ../-Ausbruch)
 const sanitizeSegment = (s) => String(s).replace(/[\\/:*?"<>|.]/g, "").trim() || "Unbekannt";
 const folderNameFor = (nr, name) => `${sanitizeSegment(nr)}_${sanitizeSegment(name).replace(/\s+/g, "_")}`;
 
 app.use(cors());
 app.use(express.json());
+
+// Nichts zwischenspeichern: Scanner-Eingang und Belegordner ändern sich
+// ständig. Ohne diesen Kopf dürfen Browser – allen voran Safari – eine Liste
+// nach eigenem Ermessen wiederverwenden, und neue Scans tauchen erst nach
+// einem Neuladen der Seite auf.
+app.use((req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
 
 // ── Middleware: Token prüfen ──────────────────────────────────────
 const requireAuth = (req, res, next) => {
@@ -97,6 +114,22 @@ const requireAuth = (req, res, next) => {
   } catch {
     return res.status(401).json({ error: "Token ungültig" });
   }
+};
+
+/**
+ * Wer die Aktion ausgelöst hat – fürs Protokoll.
+ *
+ * Angemeldet ist am Scan-Server immer nur der technische Zugang des Frontends.
+ * Wer wirklich in der App arbeitet, weiß nur der Browser; er schickt den Namen
+ * im Kopf X-BillSquid-Benutzer mit (siehe src/localServer.js). Das ist eine
+ * Beschriftung und kein Nachweis – für Berechtigungen taugt der Wert nicht.
+ */
+const wer = (req) => {
+  const roh = req.headers["x-billsquid-benutzer"];
+  if (roh) {
+    try { return decodeURIComponent(roh); } catch { return String(roh); }
+  }
+  return "unbekannt";   // ältere Oberfläche oder Aufruf von außerhalb der App
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -125,7 +158,10 @@ app.post("/auth/login", async (req, res) => {
       JWT_SECRET
   );
 
-  console.log(`Login: ${user.name} (${user.email})`);
+  // Angemeldet wird technisch immer dieselbe Kennung – interessant ist, wer
+  // gerade in der App arbeitet
+  const benutzer = wer(req);
+  console.log(benutzer === "unbekannt" ? "🔑 Frontend angemeldet" : `🔑 Angemeldet: ${benutzer}`);
   res.json({
     token,
     user: { id: user.id, name: user.name, email: user.email, rolle: user.rolle },
@@ -139,7 +175,7 @@ app.get("/auth/me", requireAuth, (req, res) => {
 
 // POST /auth/logout – Token-Invalidierung (Frontend löscht Token selbst)
 app.post("/auth/logout", requireAuth, (req, res) => {
-  console.log(`👋 Logout: ${req.user.name}`);
+  console.log(`👋 Frontend abgemeldet (${wer(req)})`);
   res.json({ success: true });
 });
 
@@ -161,7 +197,7 @@ const upload = multer({ storage });
 
 app.post("/upload", requireAuth, upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ success: false });
-  console.log(`📄 Upload von ${req.user.name}: ${req.file.path}`);
+  console.log(`📄 Upload von ${wer(req)}: ${req.file.path}`);
   res.json({ success: true, fileName: req.file.filename, path: req.file.path, size: req.file.size });
 });
 
@@ -218,7 +254,7 @@ app.post("/belege/rename", requireAuth, (req, res) => {
   try {
     const ziel = uniquePath(ordner, wunsch + ext);
     fs.renameSync(quelle, ziel);
-    console.log(`✏️ Umbenannt von ${req.user.name}: ${safeName} → ${path.basename(ziel)}`);
+    console.log(`✏️ Umbenannt von ${wer(req)}: ${safeName} → ${path.basename(ziel)}`);
     res.json({ success: true, fileName: path.basename(ziel) });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -234,7 +270,7 @@ app.delete("/belege/file", requireAuth, (req, res) => {
   }
   try {
     fs.unlinkSync(filePath);
-    console.log(`🗑️ Beleg gelöscht von ${req.user.name}: ${filePath}`);
+    console.log(`🗑️ Beleg gelöscht von ${wer(req)}: ${filePath}`);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -297,8 +333,21 @@ app.post("/drive/assign", requireAuth, async (req, res) => {
       ordnerName: folderNameFor(mandantNr, mandantName),
       neuerName: newName || null,
     });
-    console.log(`📁 Drive-Zuordnung von ${req.user.name}: ${ergebnis.name} → ${ergebnis.ordner}`);
+    console.log(`📁 Drive-Zuordnung von ${wer(req)}: ${ergebnis.name} → ${ergebnis.ordner}`);
     res.json({ success: true, ...ergebnis });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /drive/verwerfen – Scan aus dem Drive-Eingang nach _Verworfen schieben
+app.post("/drive/verwerfen", requireAuth, async (req, res) => {
+  const { fileId } = req.body || {};
+  if (!fileId) return res.status(400).json({ error: "fileId erforderlich." });
+  try {
+    const ergebnis = await gdrive.zuordnen({ fileId, ordnerName: VERWORFEN_NAME, neuerName: null });
+    console.log(`🗑️ Drive-Scan verworfen von ${wer(req)}: ${ergebnis.name}`);
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -343,6 +392,7 @@ const uniquePath = (dir, fileName) => {
 const resolveMandantFromPdf = async (filePath) => {
   let parser = null;
   try {
+    const { PDFParse } = require("pdf-parse");   // erst hier laden, siehe oben
     parser = new PDFParse({ data: new Uint8Array(fs.readFileSync(filePath)) });
     const { text } = await parser.getText();
     const haystack = (text || "").toLowerCase().replace(/\s+/g, " ");
@@ -421,7 +471,7 @@ app.post("/scan/upload", requireAuth, eingangUpload.single("file"), (req, res) =
     SCAN_VORSCHLAEGE.set(req.file.filename, { nr: String(mandantNr), name: String(mandantName) });
   }
 
-  console.log(`📲 Scan im Eingang von ${req.user.name}: ${req.file.filename}`
+  console.log(`📲 Scan im Eingang von ${wer(req)}: ${req.file.filename}`
       + (mandantName ? ` (für ${mandantName})` : ""));
   res.json({ success: true, fileName: req.file.filename, size: req.file.size });
 });
@@ -491,8 +541,28 @@ app.post("/scan/assign", requireAuth, (req, res) => {
   try {
     fs.renameSync(src, uniquePath(targetDir, targetName));
     SCAN_VORSCHLAEGE.delete(safeName);
-    console.log(`📠 Zugeordnet von ${req.user.name}: ${safeName}${targetName !== safeName ? ` (umbenannt in ${targetName})` : ""} → ${mandant.name} (${mandant.nr})`);
+    console.log(`📠 Zugeordnet von ${wer(req)}: ${safeName}${targetName !== safeName ? ` (umbenannt in ${targetName})` : ""} → ${mandant.name} (${mandant.nr})`);
     res.json({ success: true, fileName: targetName });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /scan/verwerfen – Scan aus dem lokalen Eingang nach Belege/_Verworfen
+app.post("/scan/verwerfen", requireAuth, (req, res) => {
+  const safeName = path.basename(String(req.body?.fileName || ""));
+  const src      = path.join(UNASSIGNED_DIR, safeName);
+  if (!safeName || !fs.existsSync(src)) {
+    return res.status(404).json({ error: "Datei nicht gefunden." });
+  }
+
+  const zielOrdner = path.join(BASE_PATH, VERWORFEN_NAME);
+  try {
+    fs.mkdirSync(zielOrdner, { recursive: true });
+    fs.renameSync(src, uniquePath(zielOrdner, safeName));
+    SCAN_VORSCHLAEGE.delete(safeName);
+    console.log(`🗑️ Scan verworfen von ${wer(req)}: ${safeName}`);
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -512,6 +582,6 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`   advisor@example.com        Steuerberater`);
   console.log(`   admin@example.com          Admin\n`);
 
-  console.log(`Dieser Server kennt nur den technischen Zugang des Frontends`);
-  console.log(`(doerte@kanzlei.de) – die App meldet sich damit selbst an.\n`);
+  console.log(`Dieser Server hat keinen eigenen Personen-Login – die App meldet`);
+  console.log(`sich selbst an und nennt dabei den gerade angemeldeten Benutzer.\n`);
 });

@@ -22,18 +22,23 @@ export function parseDatum(str) {
   return null;
 }
 
-const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/** Date → "2026-09-22" (so erwarten es die Datumsfelder und das Backend) */
+export const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 /**
- * Datum, nach dem gefiltert wird.
+ * Datum eines Belegs – einmal als Text für die Liste (anzeigeDatum), einmal
+ * als Date zum Filtern (datumFuer). Beide folgen derselben Regel, damit in
+ * der Spalte dasselbe steht, wonach auch gefiltert wird.
+ *
  * Beim Belegdatum wird auf das Upload-Datum zurückgegriffen, solange noch
  * keine Daten erfasst sind – sonst würden frisch hochgeladene Belege bei
  * jedem Zeitraumfilter verschwinden.
  */
+export const anzeigeDatum = (doc, bezug) =>
+    bezug === "upload" ? doc.uploadedAt : (doc.extractedData?.datum || doc.uploadedAt);
+
 export const datumFuer = (doc, bezug) =>
-    bezug === "upload"
-        ? parseDatum(doc.uploadedAt)
-        : parseDatum(doc.extractedData?.datum) ?? parseDatum(doc.uploadedAt);
+    parseDatum(anzeigeDatum(doc, bezug)) ?? parseDatum(doc.uploadedAt);
 
 /* ── Zeitraum-Schnellauswahl ───────────────────────────────────── */
 

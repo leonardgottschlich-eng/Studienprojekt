@@ -6,7 +6,7 @@ import { ZEITRAUM_PRESETS, presetZeitraum, aktiveFilter, LEERER_FILTER } from ".
  * Kopfzeile der Belegliste: Volltextsuche über die Beleginhalte plus
  * ausklappbarer Filterbereich für Zeitraum, Status und Kategorie.
  */
-export default function BelegSuche({ filter, onChange, kategorien = [], anzahl, gesamt, onExport, isMobile }) {
+export default function BelegSuche({ filter, onChange, kategorien = [], anzahl, gesamt, onExport, exportLaeuft, isMobile }) {
     const [offen, setOffen] = useState(false);
     const anzahlFilter = aktiveFilter(filter);
 
@@ -58,13 +58,16 @@ export default function BelegSuche({ filter, onChange, kategorien = [], anzahl, 
         </button>
     );
 
-    /* Export der aktuell angezeigten Belege */
+    /* Export als ZIP – das Backend filtert dabei nur nach Belegdatum */
+    const exportBereit = !!anzahl && !exportLaeuft;
     const exportKnopf = onExport && (
-        <button onClick={() => onExport(filter)} disabled={!anzahl}
-                title={anzahl ? `${anzahl} angezeigte Belege exportieren` : "Keine Belege zum Exportieren"}
-                style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 11px", border: "1px solid #e5e7eb", background: anzahl ? "#f9fafb" : "#f3f4f6", color: anzahl ? "#6b7280" : "#d1d5db", borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: anzahl ? "pointer" : "default", fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
-            <i className="bi bi-box-arrow-down" style={{ fontSize: 12 }} />
-            Export
+        <button onClick={() => onExport(filter)} disabled={!exportBereit}
+                title={anzahl
+                    ? "Belege des Zeitraums als ZIP herunterladen (Suche und Status wirken darauf nicht)"
+                    : "Keine Belege zum Exportieren"}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 11px", border: "1px solid #e5e7eb", background: exportBereit ? "#f9fafb" : "#f3f4f6", color: exportBereit ? "#6b7280" : "#d1d5db", borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: exportBereit ? "pointer" : "default", fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
+            <i className={exportLaeuft ? "bi bi-hourglass" : "bi bi-box-arrow-down"} style={{ fontSize: 12 }} />
+            {exportLaeuft ? "Export läuft…" : "Export"}
         </button>
     );
 

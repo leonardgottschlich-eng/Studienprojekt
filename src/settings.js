@@ -38,6 +38,25 @@ export const merkeSeite = (seite) => {
   try { sessionStorage.setItem(SEITE, seite); } catch { /* ignorieren */ }
 };
 
+/* Belege, die über Google Drive hereingekommen sind.
+   Für die Vorführung gelten genau diese als der vorbereitete Beleg – die
+   simulierte KI erkennt sie und sonst nichts (siehe lib/kiAnalyse.js).
+   Im localStorage, damit ein Neuladen zwischen Zuordnen und Analyse nichts
+   verliert. */
+const KI_BELEGE = "bs_ki_belege";
+const MERKE_MAX = 20;   // ältere fallen raus, die Liste soll nicht wachsen
+
+export const ladeKiBelege = () => {
+  try { return JSON.parse(localStorage.getItem(KI_BELEGE) || "[]"); } catch { return []; }
+};
+
+export const merkeKiBeleg = (id) => {
+  try {
+    const liste = [...new Set([...ladeKiBelege(), id])].slice(-MERKE_MAX);
+    localStorage.setItem(KI_BELEGE, JSON.stringify(liste));
+  } catch { /* privater Modus – dann gilt der Beleg eben als nicht vorbereitet */ }
+};
+
 /* Zuletzt gewählter Mandant */
 export const ladeLetztenMandanten = () => {
   const wert = localStorage.getItem("bs_letzter_mandant");

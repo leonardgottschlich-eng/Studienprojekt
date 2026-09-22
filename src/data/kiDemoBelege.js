@@ -2,10 +2,16 @@
  * Vorbereitetes Ergebnis der simulierten KI-Analyse (für die Präsentation).
  *
  * Eine echte KI würde die Daten aus dem Scan lesen. Hier liegen sie für einen
- * vorher ausgesuchten Beleg fest bereit und werden dem zuletzt hochgeladenen
- * Beleg zugeordnet (siehe lib/kiAnalyse.js).
+ * vorher ausgesuchten Beleg fest bereit. Erkannt wird ausschließlich dieser
+ * eine Beleg (siehe lib/kiAnalyse.js) – jeder andere gilt als "nicht erkannt"
+ * und bleibt unverändert.
  *
  * Vorlage: 05082026_1785952042639.pdf – REWE-Einkauf vom 31.07.2026
+ *
+ * Welcher Beleg diese Daten bekommt, entscheidet nicht die Datei, sondern der
+ * Weg: Jeder Beleg, der über Google Drive hereinkommt, gilt als der
+ * vorbereitete (siehe lib/kiAnalyse.js). Für die Vorführung heißt das, den
+ * Bon über den Drive-Ordner einzuspielen.
  */
 
 export const KI_DEMO_BELEG = {

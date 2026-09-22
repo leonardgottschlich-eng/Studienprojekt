@@ -55,6 +55,115 @@ export const neuerBelegPayload = ({ mandant, dateiName, dataUrl }) => ({
   pdf_base64: dataUrl,
 });
 
+/* ── Mandanten anlegen ──────────────────────────────────────────── */
+
+/**
+ * "Emma", "Schmidt" → "emma.schmidt" – das Backend verlangt einen
+ * Anmeldenamen, die Oberfläche fragt aber nur Vor- und Nachnamen ab.
+ * Umlaute werden umschrieben, alles andere fällt weg (max. 30 Zeichen laut
+ * Datenbankschema).
+ */
+export const alsAnmeldename = (vorname, nachname) =>
+    `${vorname}.${nachname}`
+        .toLowerCase()
+        .replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+        .normalize("NFD").replace(/[̀-ͯ]/g, "")
+        .replace(/[^a-z0-9.]+/g, ".")
+        .replace(/\.{2,}/g, ".")
+        .replace(/^\.|\.$/g, "")
+        .slice(0, 30);
+
+/**
+ * Neuen Mandanten anlegen und – bei einer Steuerberater:in – sich selbst
+ * zuweisen, damit er in der eigenen Liste auftaucht.
+ *
+ * Nach frontend-api.pdf (Fassung vom 22.09.2026):
+ *   POST /api/users
+ *   { username, first_name, last_name, email, password, password_confirm, group }
+ *   → 201 { status, data: { id, … } }
+ *
+ * Alle Felder sind Pflicht, group ist "client" oder "tax_advisor".
+ *
+ * ACHTUNG: Beide Aufrufe sind laut Dokumentation Administratoren vorbehalten.
+ * Eine Steuerberater:in bekommt hier also 403, bis das Backend das Anlegen
+ * (und die Selbstzuweisung) für ihre Rolle öffnet.
+ */
+export async function mandantAnlegen({ vorname, nachname, email, passwort }, beraterId = null) {
+  const { data } = await apiFetch("/users", {
+    method: "POST",
+    body: {
+      username: alsAnmeldename(vorname, nachname),
+      first_name: vorname.trim(),
+      last_name: nachname.trim(),
+      email: email.trim(),
+      password: passwort,
+      password_confirm: passwort,
+      group: "client",
+    },
+  });
+
+  if (!beraterId || !data?.id) return { mandant: data, zuweisungOffen: false };
+
+  try {
+    await apiFetch("/advisor-clients", {
+      method: "POST",
+      body: { advisor_user_id: beraterId, client_user_id: data.id, status: "active" },
+    });
+    return { mandant: data, zuweisungOffen: false };
+  } catch {
+    // Entweder hat das Backend schon zugewiesen oder es fehlt das Recht dazu.
+    // Der Mandant ist angelegt – ob er sichtbar wird, zeigt das Neuladen.
+    return { mandant: data, zuweisungOffen: true };
+  }
+}
+
+/* ── Belege exportieren ─────────────────────────────────────────── */
+
+/** Dateiname aus dem Content-Disposition-Kopf, z. B. attachment; filename="x.zip" */
+const dateiNameAusKopf = (kopf) => {
+  const treffer = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(kopf || "");
+  return treffer ? decodeURIComponent(treffer[1]) : null;
+};
+
+/**
+ * Belege eines Mandanten als ZIP-Archiv holen.
+ *
+ * GET /api/documents/export?client_user_id=…&from_date=…&to_date=…
+ * Gefiltert wird ausschließlich nach Belegdatum (einschließlich beider
+ * Grenzen); Status, Suche und Klassifikation kennt der Endpunkt nicht.
+ *
+ * Die Antwort ist eine ZIP-Datei und kein JSON – deshalb hier ein eigener
+ * fetch statt apiFetch. Fehlerantworten kommen weiterhin als JSON.
+ */
+export async function exportiereBelegeAlsZip({ mandantId, von, bis }) {
+  const params = new URLSearchParams({
+    client_user_id: String(mandantId),
+    from_date: von,
+    to_date: bis,
+  });
+
+  const res = await fetch(`/backend/api/documents/export?${params}`, {
+    headers: { Accept: "application/zip", Authorization: `Bearer ${getApiToken()}` },
+  });
+
+  if (!res.ok) {
+    const daten = await res.json().catch(() => ({}));
+    throw Object.assign(new Error(daten.message || `HTTP ${res.status}`), { status: res.status, data: daten });
+  }
+
+  return {
+    blob: await res.blob(),
+    dateiName: dateiNameAusKopf(res.headers.get("content-disposition"))
+        || `belege-${mandantId}-${von}-bis-${bis}.zip`,
+  };
+}
+
+/** Lesbare Meldung aus einer Backend-Antwort (422 liefert Feldfehler mit) */
+export const fehlerText = (e) => {
+  const felder = e?.data?.errors ? Object.values(e.data.errors).join(" ") : "";
+  return felder || e?.data?.message || e?.message || "Unbekannter Fehler";
+};
+
 /* ── Mapping Backend ↔ Frontend ─────────────────────────────────── */
 
 // Das Backend kennt pending / processing / analyzed; paid und corrected
@@ -89,7 +198,12 @@ const formatBetrag = (v) =>
     v == null || v === "" ? "" : Number(v).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
 
 const deDatum  = (iso) => (iso ? String(iso).slice(0, 10).split("-").reverse().join(".") : "");
-const isoDatum = (de)  => (/^\d{2}\.\d{2}\.\d{4}$/.test(de || "") ? de.split(".").reverse().join("-") : undefined);
+// Auch einstellige Tage und Monate annehmen ("5.8.2026"), sonst würde die
+// Eingabe beim Speichern stillschweigend unter den Tisch fallen
+const isoDatum = (de) => {
+  const t = String(de || "").trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  return t ? `${t[3]}-${t[2].padStart(2, "0")}-${t[1].padStart(2, "0")}` : undefined;
+};
 
 /**
  * Backend-Dokument → Beleg für die Liste/das Detail-Modal.
