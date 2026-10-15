@@ -1,15 +1,13 @@
-﻿/**
- * BillSquid – Lokaler Scan-Server (Port 3001)
+/**
+ * BillSquid Scan-Server (Port 3001)
  *
- * Arbeitsteilung: Benutzer, Mandanten und Belegdaten liegen im Backend
- * (CodeIgniter + MySQL, Endpunkte siehe frontend-api.md). Dieser Server
- * kümmert sich nur um die Dateien vor Ort:
- *   - Scanner-Eingang (Scan-to-Folder und Google Drive) mit Mandanten-Erkennung
- *     im PDF-Text
- *   - Belege in Belege/<Nr>_<Name> ablegen, ausliefern und löschen
+ * Benutzer, Mandanten und Belegdaten liegen im Backend (CodeIgniter und
+ * MySQL). Dieser Server kümmert sich nur um die Dateien vor Ort:
+ *   Scanner-Eingang aus Scan-to-Folder, Handy-Scans und Google Drive
+ *   Belege in Belege/<Nr>_<Name> ablegen, ausliefern, umbenennen und löschen
  *
- * Der eigene Login (JWT) ist nur ein technischer Zugang für das Frontend –
- * die Benutzeranmeldung läuft über das Backend.
+ * Der eigene Login (JWT) ist nur ein technischer Zugang für das Frontend.
+ * Die Benutzeranmeldung läuft über das Backend.
  *
  * Installation: npm install
  * Start:        node server.js   (oder npm start)
@@ -24,85 +22,72 @@ const jwt      = require("jsonwebtoken");
 const bcrypt   = require("bcryptjs");
 const chokidar = require("chokidar");
 const gdrive   = require("./drive");
-// pdf-parse kostet beim Laden rund 200 ms und wird nur gebraucht, wenn ein
-// PDF im Scanner-Eingang auf einen Mandanten untersucht wird – deshalb erst
-// dann (siehe resolveMandantFromPdf).
 
 const app  = express();
 const PORT = 3001;
 
-// ── Sicherheits-Schlüssel ─────────────────────────────────────────
+// Schlüssel, mit dem die Tokens signiert werden
 const JWT_SECRET = "billsquid-geheimer-schluessel-2026";
 
-// ── Technischer Zugang für das Frontend ──────────────────────────
-// Keine echten Benutzerkonten: Die Anmeldung der App läuft über das Backend.
-// Diese Kennung nutzt billsquid/src/localServer.js automatisch, damit nur die
-// eigene App an den Scanner-Eingang kommt.
-// Passwörter sind gehasht mit bcrypt (nie Klartext speichern!)
-// Passwort für beide Kennungen: "billsquid123"
+// Technischer Zugang für das Frontend. Das ist kein echtes Benutzerkonto,
+// die Anmeldung der App läuft über das Backend. billsquid/src/localServer.js
+// meldet sich damit automatisch an, damit nur die eigene App an den
+// Scanner-Eingang kommt. Das Passwort ist mit bcrypt gehasht.
 const USERS = [
   {
     id: 1,
     name:     "Dörte Ludwig",
     email:    "doerte@kanzlei.de",
     rolle:    "Steuerberaterin",
-    // bcrypt-Hash von "billsquid123" – in Produktion individuell setzen
-    passwort: "$2b$10$VO1Lg6jE/AFXDqjzqVhz9umOsZRfzL3M75vK83ULyd1nO8mtG9isS",
-  },
-  {
-    id: 2,
-    name:     "Max Mustermann",
-    email:    "max@kanzlei.de",
-    rolle:    "Sachbearbeiter",
     passwort: "$2b$10$VO1Lg6jE/AFXDqjzqVhz9umOsZRfzL3M75vK83ULyd1nO8mtG9isS",
   },
 ];
 
-// ── Mandanten für die Erkennung im PDF ────────────────────────────
-// Dient nur dem Vorschlag im Scanner-Eingang. Im Betrieb kommen die Mandanten
-// aus der Backend-Datenbank (Nummern KD-001, KD-002 …); /scan/assign bekommt
-// Nummer und Name deshalb vom Frontend mitgeschickt und ist auf diese Liste
-// nicht angewiesen.
-const MANDANTEN = [
-  { nr: "MK-2024-001", name: "Max Kirchner" },
-  { nr: "SH-2024-002", name: "Sabine Hoffmann" },
-  { nr: "BG-2023-015", name: "Baumann GmbH" },
-  { nr: "RS-2024-008", name: "Rainer Schulz" },
-  { nr: "TS-2024-022", name: "TechStart UG" },
-  { nr: "PW-2023-044", name: "Petra Winkel" },
-  { nr: "MG-2024-031", name: "Markus Gruber" },
-  { nr: "BM-2022-007", name: "Bäckerei Meier OHG" },
-];
-
-// ── Basis-Setup ───────────────────────────────────────────────────
-// Die Belege liegen neben dem Projekt, nicht im Repository – dort haben
-// Mandantendaten nichts verloren. Über BELEGE_PFAD umstellbar.
+// Die Belege liegen neben dem Projekt und nicht im Repository, dort haben
+// Mandantendaten nichts verloren. Über BELEGE_PFAD lässt sich der Ort ändern.
 const BASE_PATH = process.env.BELEGE_PFAD || path.join(__dirname, "..", "..", "Belege");
 fs.mkdirSync(BASE_PATH, { recursive: true });
 
-// Aus dem Eingang verworfene Scans – lokal wie in Google Drive. Sie werden
-// verschoben statt gelöscht: Bei steuerlich relevanten Belegen wäre
+// Aus dem Eingang verworfene Scans, lokal wie in Google Drive. Sie werden
+// verschoben statt gelöscht. Bei steuerlich relevanten Belegen wäre
 // endgültiges Löschen per Klick zu riskant, und in Drive darf das Dienstkonto
-// fremde Dateien ohnehin nur verschieben, nicht löschen.
+// fremde Dateien ohnehin nur verschieben.
 const VERWORFEN_NAME = "_Verworfen";
 
-// Ordnernamen von pfad-gefährlichen Zeichen befreien (kein ../-Ausbruch)
+// Ordnernamen von Zeichen befreien, mit denen man aus dem Ordner ausbrechen könnte
 const sanitizeSegment = (s) => String(s).replace(/[\\/:*?"<>|.]/g, "").trim() || "Unbekannt";
 const folderNameFor = (nr, name) => `${sanitizeSegment(nr)}_${sanitizeSegment(name).replace(/\s+/g, "_")}`;
+
+// Zielpfad, der keine bestehende Datei überschreibt
+const uniquePath = (dir, fileName) => {
+  const target = path.join(dir, fileName);
+  if (!fs.existsSync(target)) return target;
+  const ext  = path.extname(fileName);
+  const base = path.basename(fileName, ext);
+  return path.join(dir, `${base}_${Date.now()}${ext}`);
+};
+
+// Wunschnamen bereinigen: keine Pfade, keine Sonderzeichen, die Endung des
+// Originals bleibt erhalten
+const bereinigterName = (newName, ext) =>
+    path.basename(String(newName || "").trim())
+        .replace(/[\\/:*?"<>|]/g, "")
+        .replace(new RegExp(`\\${ext}$`, "i"), "")
+        .trim();
 
 app.use(cors());
 app.use(express.json());
 
-// Nichts zwischenspeichern: Scanner-Eingang und Belegordner ändern sich
-// ständig. Ohne diesen Kopf dürfen Browser – allen voran Safari – eine Liste
-// nach eigenem Ermessen wiederverwenden, und neue Scans tauchen erst nach
-// einem Neuladen der Seite auf.
+// Nichts zwischenspeichern. Scanner-Eingang und Belegordner ändern sich
+// ständig, und ohne diesen Kopf dürfen Browser eine Liste nach eigenem
+// Ermessen wiederverwenden. Neue Scans tauchten dann erst nach einem
+// Neuladen der Seite auf.
 app.use((req, res, next) => {
   res.set("Cache-Control", "no-store");
   next();
 });
 
-// ── Middleware: Token prüfen ──────────────────────────────────────
+// Prüft den Token des Frontends
 const requireAuth = (req, res, next) => {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) {
@@ -117,26 +102,24 @@ const requireAuth = (req, res, next) => {
 };
 
 /**
- * Wer die Aktion ausgelöst hat – fürs Protokoll.
+ * Wer die Aktion ausgelöst hat, fürs Protokoll.
  *
  * Angemeldet ist am Scan-Server immer nur der technische Zugang des Frontends.
- * Wer wirklich in der App arbeitet, weiß nur der Browser; er schickt den Namen
+ * Wer wirklich in der App arbeitet, weiß nur der Browser. Er schickt den Namen
  * im Kopf X-BillSquid-Benutzer mit (siehe src/localServer.js). Das ist eine
- * Beschriftung und kein Nachweis – für Berechtigungen taugt der Wert nicht.
+ * Beschriftung und kein Nachweis, für Berechtigungen taugt der Wert nicht.
  */
 const wer = (req) => {
   const roh = req.headers["x-billsquid-benutzer"];
   if (roh) {
     try { return decodeURIComponent(roh); } catch { return String(roh); }
   }
-  return "unbekannt";   // ältere Oberfläche oder Aufruf von außerhalb der App
+  return "unbekannt";   // Aufruf von außerhalb der App
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// AUTH ENDPUNKTE
-// ═══════════════════════════════════════════════════════════════════
+/* Anmeldung */
 
-// POST /auth/login – Anmelden
+// POST /auth/login: technischen Zugang anmelden
 app.post("/auth/login", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -158,49 +141,25 @@ app.post("/auth/login", async (req, res) => {
       JWT_SECRET
   );
 
-  // Angemeldet wird technisch immer dieselbe Kennung – interessant ist, wer
-  // gerade in der App arbeitet
+  // Technisch meldet sich immer dieselbe Kennung an. Interessant ist, wer
+  // gerade in der App arbeitet.
   const benutzer = wer(req);
-  console.log(benutzer === "unbekannt" ? "🔑 Frontend angemeldet" : `🔑 Angemeldet: ${benutzer}`);
+  console.log(benutzer === "unbekannt" ? "Frontend angemeldet" : `Angemeldet: ${benutzer}`);
   res.json({
     token,
     user: { id: user.id, name: user.name, email: user.email, rolle: user.rolle },
   });
 });
 
-// GET /auth/me – aktuellen Benutzer abrufen
-app.get("/auth/me", requireAuth, (req, res) => {
-  res.json({ user: req.user });
-});
-
-// POST /auth/logout – Token-Invalidierung (Frontend löscht Token selbst)
+// POST /auth/logout: nur fürs Protokoll, den Token verwirft das Frontend selbst
 app.post("/auth/logout", requireAuth, (req, res) => {
-  console.log(`👋 Frontend abgemeldet (${wer(req)})`);
+  console.log(`Frontend abgemeldet (${wer(req)})`);
   res.json({ success: true });
 });
 
-// ═══════════════════════════════════════════════════════════════════
-// BELEG ENDPUNKTE (geschützt mit requireAuth)
-// ═══════════════════════════════════════════════════════════════════
+/* Belege im Mandantenordner */
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const mandantNr   = req.query.mandantNr   || "Unbekannt";
-    const mandantName = req.query.mandantName || "Unbekannt";
-    const targetDir   = path.join(BASE_PATH, folderNameFor(mandantNr, mandantName));
-    fs.mkdirSync(targetDir, { recursive: true });
-    cb(null, targetDir);
-  },
-  filename: (req, file, cb) => cb(null, file.originalname),
-});
-const upload = multer({ storage });
-
-app.post("/upload", requireAuth, upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ success: false });
-  console.log(`📄 Upload von ${wer(req)}: ${req.file.path}`);
-  res.json({ success: true, fileName: req.file.filename, path: req.file.path, size: req.file.size });
-});
-
+// GET /belege?mandantNr=…&mandantName=…: Dateien im Mandantenordner auflisten
 app.get("/belege", requireAuth, (req, res) => {
   const mandantNr   = req.query.mandantNr   || "Unbekannt";
   const mandantName = req.query.mandantName || "Unbekannt";
@@ -221,7 +180,7 @@ app.get("/belege", requireAuth, (req, res) => {
   }
 });
 
-// GET /belege/file?mandantNr=…&mandantName=…&name=… – Beleg zur Ansicht ausliefern
+// GET /belege/file?mandantNr=…&mandantName=…&name=…: Beleg zur Ansicht ausliefern
 app.get("/belege/file", requireAuth, (req, res) => {
   const fileName  = path.basename(String(req.query.name || ""));
   const targetDir = path.join(BASE_PATH, folderNameFor(req.query.mandantNr || "Unbekannt", req.query.mandantName || "Unbekannt"));
@@ -232,7 +191,7 @@ app.get("/belege/file", requireAuth, (req, res) => {
   res.sendFile(filePath);
 });
 
-// POST /belege/rename – Beleg im Mandantenordner umbenennen.
+// POST /belege/rename: Beleg im Mandantenordner umbenennen.
 // Die Endung bleibt erhalten, damit aus einem PDF kein namenloser Anhang wird.
 app.post("/belege/rename", requireAuth, (req, res) => {
   const { mandantNr, mandantName, fileName, newName } = req.body || {};
@@ -245,23 +204,20 @@ app.post("/belege/rename", requireAuth, (req, res) => {
   }
 
   const ext    = path.extname(safeName);
-  const wunsch = path.basename(String(newName || "").trim())
-      .replace(/[\\/:*?"<>|]/g, "")
-      .replace(new RegExp(`\\${ext}$`, "i"), "")
-      .trim();
+  const wunsch = bereinigterName(newName, ext);
   if (!wunsch) return res.status(400).json({ error: "Kein gültiger Name." });
 
   try {
     const ziel = uniquePath(ordner, wunsch + ext);
     fs.renameSync(quelle, ziel);
-    console.log(`✏️ Umbenannt von ${wer(req)}: ${safeName} → ${path.basename(ziel)}`);
+    console.log(`Umbenannt von ${wer(req)}: ${safeName} in ${path.basename(ziel)}`);
     res.json({ success: true, fileName: path.basename(ziel) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// DELETE /belege/file?mandantNr=…&mandantName=…&name=… – Beleg endgültig löschen
+// DELETE /belege/file?mandantNr=…&mandantName=…&name=…: Beleg endgültig löschen
 app.delete("/belege/file", requireAuth, (req, res) => {
   const fileName = path.basename(String(req.query.name || ""));
   const filePath = path.join(BASE_PATH, folderNameFor(req.query.mandantNr || "Unbekannt", req.query.mandantName || "Unbekannt"), fileName);
@@ -270,24 +226,18 @@ app.delete("/belege/file", requireAuth, (req, res) => {
   }
   try {
     fs.unlinkSync(filePath);
-    console.log(`🗑️ Beleg gelöscht von ${wer(req)}: ${filePath}`);
+    console.log(`Beleg gelöscht von ${wer(req)}: ${filePath}`);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════
-// GOOGLE DRIVE
-// Scans, die per Drive-Desktop-Synchronisierung im freigegebenen Ordner
-// landen, erscheinen im selben Scanner-Eingang wie die lokalen Dateien.
-// ═══════════════════════════════════════════════════════════════════
+/* Google Drive
+   Scans, die über die Drive-Desktop-Synchronisierung im freigegebenen Ordner
+   landen, erscheinen im selben Scanner-Eingang wie die lokalen Dateien. */
 
-app.get("/drive/status", requireAuth, async (req, res) => {
-  res.json(await gdrive.status());
-});
-
-// GET /drive/inbox – noch nicht zugeordnete Scans aus Drive
+// GET /drive/inbox: noch nicht zugeordnete Scans aus Drive
 app.get("/drive/inbox", requireAuth, async (req, res) => {
   if (!gdrive.aktiv()) return res.json({ files: [] });
   try {
@@ -297,7 +247,7 @@ app.get("/drive/inbox", requireAuth, async (req, res) => {
   }
 });
 
-// GET /drive/file?id=… – Datei zur Vorschau bzw. zum Hochladen ausliefern
+// GET /drive/file?id=…: Datei zur Vorschau oder zum Hochladen ausliefern
 app.get("/drive/file", requireAuth, async (req, res) => {
   try {
     const { name, mimeType, daten } = await gdrive.dateiInhalt(String(req.query.id || ""));
@@ -309,7 +259,7 @@ app.get("/drive/file", requireAuth, async (req, res) => {
   }
 });
 
-// POST /drive/ordner – _Unzugeordnet und die Mandantenordner anlegen
+// POST /drive/ordner: _Unzugeordnet und die Mandantenordner anlegen
 app.post("/drive/ordner", requireAuth, async (req, res) => {
   try {
     const namen = (req.body?.mandanten || [])
@@ -321,7 +271,7 @@ app.post("/drive/ordner", requireAuth, async (req, res) => {
   }
 });
 
-// POST /drive/assign – Scan benennen und in den Mandantenordner verschieben
+// POST /drive/assign: Scan benennen und in den Mandantenordner verschieben
 app.post("/drive/assign", requireAuth, async (req, res) => {
   const { fileId, mandantNr, mandantName, newName } = req.body || {};
   if (!fileId || !mandantNr || !mandantName) {
@@ -333,122 +283,65 @@ app.post("/drive/assign", requireAuth, async (req, res) => {
       ordnerName: folderNameFor(mandantNr, mandantName),
       neuerName: newName || null,
     });
-    console.log(`📁 Drive-Zuordnung von ${wer(req)}: ${ergebnis.name} → ${ergebnis.ordner}`);
+    console.log(`Drive-Zuordnung von ${wer(req)}: ${ergebnis.name} nach ${ergebnis.ordner}`);
     res.json({ success: true, ...ergebnis });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// POST /drive/verwerfen – Scan aus dem Drive-Eingang nach _Verworfen schieben
+// POST /drive/verwerfen: Scan aus dem Drive-Eingang nach _Verworfen schieben
 app.post("/drive/verwerfen", requireAuth, async (req, res) => {
   const { fileId } = req.body || {};
   if (!fileId) return res.status(400).json({ error: "fileId erforderlich." });
   try {
     const ergebnis = await gdrive.zuordnen({ fileId, ordnerName: VERWORFEN_NAME, neuerName: null });
-    console.log(`🗑️ Drive-Scan verworfen von ${wer(req)}: ${ergebnis.name}`);
+    console.log(`Drive-Scan verworfen von ${wer(req)}: ${ergebnis.name}`);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+// GET /status: Lebenszeichen für die Einstellungsseite
 app.get("/status", (req, res) => {
   res.json({ running: true, basePath: BASE_PATH });
 });
 
-// ═══════════════════════════════════════════════════════════════════
-// SCANNER-EINGANG
-// Der Belegscanner legt Dateien (Scan-to-Folder) in _Scanner-Eingang ab.
-// Der Server liest den PDF-Text und sucht darin nach Mandantennummer
-// oder -name → automatische Zuordnung in den Mandantenordner.
-// Ohne Treffer (oder bei Bild-PDFs ohne Textebene) → _Unzugeordnet,
-// dort erfolgt die Zuordnung manuell über das Frontend.
-// ═══════════════════════════════════════════════════════════════════
+/* Scanner-Eingang
+   Der Belegscanner legt Dateien per Scan-to-Folder in _Scanner-Eingang ab.
+   Von dort wandern sie nach _Unzugeordnet und warten, bis sie im Frontend
+   benannt und einem Mandanten zugeordnet werden. */
 
 const SCAN_INBOX     = path.join(BASE_PATH, "_Scanner-Eingang");
 const UNASSIGNED_DIR = path.join(BASE_PATH, "_Unzugeordnet");
 fs.mkdirSync(SCAN_INBOX,     { recursive: true });
 fs.mkdirSync(UNASSIGNED_DIR, { recursive: true });
 
-// true  = Scans mit erkanntem Mandanten werden sofort einsortiert (altes Verhalten)
-// false = alle Scans warten im Eingang, bis sie im Frontend benannt und
-//         zugeordnet wurden; ein erkannter Mandant wird nur als Vorschlag gemerkt
-const AUTO_ZUORDNUNG = false;
-
-// Dateiname im Eingang → aus dem PDF erkannter Mandant (Vorschlag fürs Frontend)
+// Dateiname im Eingang und der Mandant, für den der Scan gedacht ist.
+// Das Frontend wählt diesen Mandanten im Eingang vor.
 const SCAN_VORSCHLAEGE = new Map();
 
-// Zielpfad, der keine bestehende Datei überschreibt
-const uniquePath = (dir, fileName) => {
-  const target = path.join(dir, fileName);
-  if (!fs.existsSync(target)) return target;
-  const ext  = path.extname(fileName);
-  const base = path.basename(fileName, ext);
-  return path.join(dir, `${base}_${Date.now()}${ext}`);
-};
-
-// PDF-Text extrahieren und nach Mandantennummer bzw. -name durchsuchen
-const resolveMandantFromPdf = async (filePath) => {
-  let parser = null;
-  try {
-    const { PDFParse } = require("pdf-parse");   // erst hier laden, siehe oben
-    parser = new PDFParse({ data: new Uint8Array(fs.readFileSync(filePath)) });
-    const { text } = await parser.getText();
-    const haystack = (text || "").toLowerCase().replace(/\s+/g, " ");
-    return (
-        MANDANTEN.find((m) => haystack.includes(m.nr.toLowerCase())) ||
-        MANDANTEN.find((m) => haystack.includes(m.name.toLowerCase())) ||
-        null
-    );
-  } catch (e) {
-    console.warn(`PDF nicht lesbar (${path.basename(filePath)}): ${e.message}`);
-    return null;
-  } finally {
-    try { await parser?.destroy(); } catch { /* ignorieren */ }
-  }
-};
-
-const processScan = async (filePath) => {
+const processScan = (filePath) => {
   const fileName = path.basename(filePath);
   if (fileName.startsWith(".") || fileName.startsWith("~")) return; // temporäre Dateien
-  const mandant = /\.pdf$/i.test(fileName) ? await resolveMandantFromPdf(filePath) : null;
-
-  if (AUTO_ZUORDNUNG && mandant) {
-    const targetDir = path.join(BASE_PATH, folderNameFor(mandant.nr, mandant.name));
-    fs.mkdirSync(targetDir, { recursive: true });
-    try {
-      fs.renameSync(filePath, uniquePath(targetDir, fileName));
-      console.log(`📠 Scan automatisch zugeordnet: ${fileName} → ${mandant.name} (${mandant.nr})`);
-    } catch (e) {
-      console.error(`Scan konnte nicht verschoben werden: ${e.message}`);
-    }
-    return;
-  }
-
-  // In den Eingang legen – dort wird er im Frontend benannt und zugeordnet.
-  // Ein erkannter Mandant wird als Vorschlag gemerkt.
   try {
-    const target = uniquePath(UNASSIGNED_DIR, fileName);
-    fs.renameSync(filePath, target);
-    if (mandant) SCAN_VORSCHLAEGE.set(path.basename(target), { nr: mandant.nr, name: mandant.name });
-    console.log(mandant
-        ? `📠 Scan im Eingang, Vorschlag: ${fileName} → ${mandant.name} (${mandant.nr})`
-        : `📠 Scan im Eingang, kein Mandant erkannt: ${fileName}`);
+    fs.renameSync(filePath, uniquePath(UNASSIGNED_DIR, fileName));
+    console.log(`Scan im Eingang: ${fileName}`);
   } catch (e) {
     console.error(`Scan konnte nicht verschoben werden: ${e.message}`);
   }
 };
 
 // awaitWriteFinish: erst verarbeiten, wenn der Scanner die Datei fertig
-// geschrieben hat (Größe 1,5 s stabil). Verarbeitet beim Start auch
-// Dateien, die noch im Eingang liegen.
+// geschrieben hat und ihre Größe 1,5 Sekunden stabil ist. Beim Start werden
+// auch Dateien verarbeitet, die schon im Eingang liegen.
 chokidar
     .watch(SCAN_INBOX, { awaitWriteFinish: { stabilityThreshold: 1500, pollInterval: 200 } })
     .on("add", processScan);
 
-// POST /scan/upload – Datei direkt in den Scanner-Eingang legen.
-// Damit landet ein Handy-Scan dort, wo auch der Belegscanner ablegt: Er wird
+// POST /scan/upload: Datei direkt in den Scanner-Eingang legen.
+// Damit landet ein Handy-Scan dort, wo auch der Belegscanner ablegt. Er wird
 // erst benannt und einem Mandanten zugeordnet, bevor er als Beleg weitergeht.
 const eingangUpload = multer({
   storage: multer.diskStorage({
@@ -471,14 +364,14 @@ app.post("/scan/upload", requireAuth, eingangUpload.single("file"), (req, res) =
     SCAN_VORSCHLAEGE.set(req.file.filename, { nr: String(mandantNr), name: String(mandantName) });
   }
 
-  console.log(`📲 Scan im Eingang von ${wer(req)}: ${req.file.filename}`
+  console.log(`Scan im Eingang von ${wer(req)}: ${req.file.filename}`
       + (mandantName ? ` (für ${mandantName})` : ""));
   res.json({ success: true, fileName: req.file.filename, size: req.file.size });
 });
 
-// GET /scan/inbox – unzugeordnete Scans auflisten.
-// Mit ?mandantNr=… nur die Scans, die für diesen Mandanten gedacht sind –
-// so bekommt ein angemeldeter Mandant die Scans der anderen gar nicht erst zu
+// GET /scan/inbox: unzugeordnete Scans auflisten.
+// Mit ?mandantNr=… nur die Scans, die für diesen Mandanten gedacht sind. So
+// bekommt ein angemeldeter Mandant die Scans der anderen gar nicht erst zu
 // sehen. Die Kanzlei fragt ohne Filter und erhält den ganzen Eingang.
 app.get("/scan/inbox", requireAuth, (req, res) => {
   const nurFuer = req.query.mandantNr ? String(req.query.mandantNr) : null;
@@ -500,7 +393,7 @@ app.get("/scan/inbox", requireAuth, (req, res) => {
   }
 });
 
-// GET /scan/file?name=… – unzugeordneten Scan zur Vorschau ausliefern
+// GET /scan/file?name=…: unzugeordneten Scan zur Vorschau ausliefern
 app.get("/scan/file", requireAuth, (req, res) => {
   const fileName = path.basename(String(req.query.name || ""));
   const filePath = path.join(UNASSIGNED_DIR, fileName);
@@ -510,45 +403,38 @@ app.get("/scan/file", requireAuth, (req, res) => {
   res.sendFile(filePath);
 });
 
-// POST /scan/assign – Scan benennen und einem Mandanten zuordnen
-// Optionales newName benennt die Datei beim Einsortieren um (Endung bleibt erhalten)
+// POST /scan/assign: Scan einem Mandanten zuordnen. Ein optionales newName
+// benennt die Datei dabei um, die Endung bleibt erhalten.
 app.post("/scan/assign", requireAuth, (req, res) => {
   const { fileName, mandantNr, mandantName, newName } = req.body || {};
-  // Mandant aus der Festliste – oder aus dem Request (Mandanten aus der Backend-DB)
-  const mandant  = MANDANTEN.find((m) => m.nr === mandantNr)
-      || (mandantNr && String(mandantName || "").trim()
-          ? { nr: String(mandantNr), name: String(mandantName).trim() }
-          : null);
+  const name     = String(mandantName || "").trim();
   const safeName = path.basename(String(fileName || ""));
   const src      = path.join(UNASSIGNED_DIR, safeName);
 
-  if (!mandant) return res.status(400).json({ error: "Unbekannter Mandant." });
+  if (!mandantNr || !name) return res.status(400).json({ error: "Unbekannter Mandant." });
   if (!safeName || !fs.existsSync(src)) {
     return res.status(404).json({ error: "Datei nicht gefunden." });
   }
 
-  // Wunschname bereinigen: keine Pfade, keine Sonderzeichen, Original-Endung erzwingen
-  const ext = path.extname(safeName);
-  let targetName = safeName;
-  const wunsch = path.basename(String(newName || "").trim())
-      .replace(/[\\/:*?"<>|]/g, "")
-      .replace(new RegExp(`\\${ext}$`, "i"), "")
-      .trim();
-  if (wunsch) targetName = wunsch + ext;
+  const ext        = path.extname(safeName);
+  const wunsch     = bereinigterName(newName, ext);
+  const targetName = wunsch ? wunsch + ext : safeName;
 
-  const targetDir = path.join(BASE_PATH, folderNameFor(mandant.nr, mandant.name));
+  const targetDir = path.join(BASE_PATH, folderNameFor(mandantNr, name));
   fs.mkdirSync(targetDir, { recursive: true });
   try {
     fs.renameSync(src, uniquePath(targetDir, targetName));
     SCAN_VORSCHLAEGE.delete(safeName);
-    console.log(`📠 Zugeordnet von ${wer(req)}: ${safeName}${targetName !== safeName ? ` (umbenannt in ${targetName})` : ""} → ${mandant.name} (${mandant.nr})`);
+    console.log(`Zugeordnet von ${wer(req)}: ${safeName}`
+        + (targetName !== safeName ? ` (umbenannt in ${targetName})` : "")
+        + ` an ${name} (${mandantNr})`);
     res.json({ success: true, fileName: targetName });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// POST /scan/verwerfen – Scan aus dem lokalen Eingang nach Belege/_Verworfen
+// POST /scan/verwerfen: Scan aus dem lokalen Eingang nach Belege/_Verworfen schieben
 app.post("/scan/verwerfen", requireAuth, (req, res) => {
   const safeName = path.basename(String(req.body?.fileName || ""));
   const src      = path.join(UNASSIGNED_DIR, safeName);
@@ -561,7 +447,7 @@ app.post("/scan/verwerfen", requireAuth, (req, res) => {
     fs.mkdirSync(zielOrdner, { recursive: true });
     fs.renameSync(src, uniquePath(zielOrdner, safeName));
     SCAN_VORSCHLAEGE.delete(safeName);
-    console.log(`🗑️ Scan verworfen von ${wer(req)}: ${safeName}`);
+    console.log(`Scan verworfen von ${wer(req)}: ${safeName}`);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -574,7 +460,7 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`Scanner-Eingang: ${SCAN_INBOX}`);
   console.log(`Google Drive:    ${gdrive.aktiv() ? "aktiv" : "inaktiv (keine service-account.json)"}\n`);
 
-  console.log(`Anmeldung der App läuft über das Backend, nicht über diesen Server.`);
+  console.log(`Die Anmeldung der App läuft über das Backend, nicht über diesen Server.`);
   console.log(`Demo-Benutzer (Passwort für alle: Password123!):`);
   console.log(`   emma.schmidt@example.com   Mandantin`);
   console.log(`   noah.weber@example.com     Mandant`);
@@ -582,6 +468,6 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`   advisor@example.com        Steuerberater`);
   console.log(`   admin@example.com          Admin\n`);
 
-  console.log(`Dieser Server hat keinen eigenen Personen-Login – die App meldet`);
-  console.log(`sich selbst an und nennt dabei den gerade angemeldeten Benutzer.\n`);
+  console.log(`Dieser Server hat keinen eigenen Personen-Login. Die App meldet sich`);
+  console.log(`selbst an und nennt dabei den gerade angemeldeten Benutzer.\n`);
 });

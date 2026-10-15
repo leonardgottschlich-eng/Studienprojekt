@@ -36,16 +36,16 @@ export default function Login({ onLogin }) {
         rolle: rollen[(data.user.groups || []).find((g) => rollen[g])] || "Benutzer",
       };
 
-      // Token im sessionStorage speichern (bleibt bis Browser-Tab geschlossen)
+      // Token im sessionStorage speichern, er gilt bis der Browser-Tab geschlossen wird
       sessionStorage.setItem("bs_api_token", data.access_token);
       sessionStorage.setItem("bs_user", JSON.stringify(user));
 
       // Am lokalen Scan-Server meldet sich die App bei Bedarf selbst an
-      // (siehe localServer.js) – er muss beim Login noch nicht laufen.
+      // (siehe localServer.js), er muss beim Login noch nicht laufen.
       onLogin(user);
     } catch {
-      // Ein fetch-Fehler heißt nur "Verbindung kam nicht zustande" – die Ursache
-      // liegt oft schon vor dem Backend (z. B. Zertifikat des Dev-Servers).
+      // Ein fetch-Fehler heißt nur, dass keine Verbindung zustande kam. Die
+      // Ursache liegt oft schon vor dem Backend, etwa beim Zertifikat des Dev-Servers.
       setError("Verbindung fehlgeschlagen. Läuft der Dev-Server und ist das Zertifikat akzeptiert? Details in der Browser-Konsole (F12).");
     }
 

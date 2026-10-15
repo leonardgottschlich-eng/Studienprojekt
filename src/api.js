@@ -1,9 +1,10 @@
 /**
- * Zugriff auf das BillSquid-Backend (CodeIgniter + MySQL).
- * Läuft über den Vite-Proxy (/backend → https://app.billsquid.com),
- * dadurch sind keine CORS-Einstellungen nötig.
+ * Zugriff auf das BillSquid-Backend (CodeIgniter und MySQL).
+ * Die Aufrufe laufen über den Vite-Proxy, der /backend an
+ * https://app.billsquid.com weiterreicht. Dadurch sind keine
+ * CORS-Einstellungen nötig.
  *
- * Endpunkte und Datenmodelle: siehe frontend-api.md
+ * Endpunkte und Datenmodelle stehen in der API-Dokumentation des Backends.
  */
 
 import { bereinigeKategorien } from "./data/kategorien";
@@ -27,7 +28,7 @@ export async function apiFetch(path, { method = "GET", body, token = getApiToken
   return data;
 }
 
-/** Datei oder Blob → "data:application/pdf;base64,…" (das Backend nimmt die volle Data-URL) */
+/** Liest eine Datei als Data-URL ("data:application/pdf;base64,…"), so nimmt sie das Backend an */
 export const dateiZuDataUrl = (datei) =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -37,10 +38,10 @@ export const dateiZuDataUrl = (datei) =>
     });
 
 /**
- * Payload für einen frisch eingegangenen Beleg (Upload oder Scanner-Eingang).
- * Das Backend verlangt Rechnungsfelder als Pflichtangaben, ein roher Scan hat
- * die noch nicht – daher Platzhalter. Die echten Werte trägt man später im
- * Detail-Modal nach, sie gehen dann per PATCH an dieselbe Stelle.
+ * Payload für einen frisch eingegangenen Beleg aus Upload oder Scanner-Eingang.
+ * Das Backend verlangt Rechnungsfelder als Pflichtangaben, die ein roher Scan
+ * noch nicht hat. Deshalb stehen dort Platzhalter. Die echten Werte trägt man
+ * später in der Detailansicht nach, sie gehen dann per PATCH an dieselbe Stelle.
  */
 export const neuerBelegPayload = ({ mandant, dateiName, dataUrl }) => ({
   client_user_id: mandant.id,
@@ -55,13 +56,13 @@ export const neuerBelegPayload = ({ mandant, dateiName, dataUrl }) => ({
   pdf_base64: dataUrl,
 });
 
-/* ── Mandanten anlegen ──────────────────────────────────────────── */
+/* Mandanten anlegen */
 
 /**
- * "Emma", "Schmidt" → "emma.schmidt" – das Backend verlangt einen
- * Anmeldenamen, die Oberfläche fragt aber nur Vor- und Nachnamen ab.
- * Umlaute werden umschrieben, alles andere fällt weg (max. 30 Zeichen laut
- * Datenbankschema).
+ * Bildet aus Vor- und Nachname einen Anmeldenamen, etwa "emma.schmidt".
+ * Das Backend verlangt einen, die Oberfläche fragt aber nur den Namen ab.
+ * Umlaute werden umschrieben, andere Sonderzeichen fallen weg, und laut
+ * Datenbankschema sind höchstens 30 Zeichen erlaubt.
  */
 export const alsAnmeldename = (vorname, nachname) =>
     `${vorname}.${nachname}`
@@ -74,19 +75,18 @@ export const alsAnmeldename = (vorname, nachname) =>
         .slice(0, 30);
 
 /**
- * Neuen Mandanten anlegen und – bei einer Steuerberater:in – sich selbst
- * zuweisen, damit er in der eigenen Liste auftaucht.
+ * Legt einen neuen Mandanten an. Legt ihn eine Steuerberater:in an, wird er
+ * ihr direkt zugewiesen, damit er in der eigenen Liste auftaucht.
  *
- * Nach frontend-api.pdf (Fassung vom 22.09.2026):
  *   POST /api/users
  *   { username, first_name, last_name, email, password, password_confirm, group }
- *   → 201 { status, data: { id, … } }
+ *   Antwort 201 { status, data: { id, … } }
  *
  * Alle Felder sind Pflicht, group ist "client" oder "tax_advisor".
  *
- * ACHTUNG: Beide Aufrufe sind laut Dokumentation Administratoren vorbehalten.
- * Eine Steuerberater:in bekommt hier also 403, bis das Backend das Anlegen
- * (und die Selbstzuweisung) für ihre Rolle öffnet.
+ * Beide Aufrufe sind laut API-Dokumentation Administratoren vorbehalten.
+ * Eine Steuerberater:in bekommt hier also 403, solange das Backend Anlegen
+ * und Zuweisen für ihre Rolle nicht freigibt.
  */
 export async function mandantAnlegen({ vorname, nachname, email, passwort }, beraterId = null) {
   const { data } = await apiFetch("/users", {
@@ -112,12 +112,12 @@ export async function mandantAnlegen({ vorname, nachname, email, passwort }, ber
     return { mandant: data, zuweisungOffen: false };
   } catch {
     // Entweder hat das Backend schon zugewiesen oder es fehlt das Recht dazu.
-    // Der Mandant ist angelegt – ob er sichtbar wird, zeigt das Neuladen.
+    // Der Mandant ist angelegt, ob er sichtbar wird, zeigt das Neuladen.
     return { mandant: data, zuweisungOffen: true };
   }
 }
 
-/* ── Belege exportieren ─────────────────────────────────────────── */
+/* Belege exportieren */
 
 /** Dateiname aus dem Content-Disposition-Kopf, z. B. attachment; filename="x.zip" */
 const dateiNameAusKopf = (kopf) => {
@@ -130,10 +130,10 @@ const dateiNameAusKopf = (kopf) => {
  *
  * GET /api/documents/export?client_user_id=…&from_date=…&to_date=…
  * Gefiltert wird ausschließlich nach Belegdatum (einschließlich beider
- * Grenzen); Status, Suche und Klassifikation kennt der Endpunkt nicht.
+ * Grenzen). Status, Suche und Klassifikation kennt der Endpunkt nicht.
  *
- * Die Antwort ist eine ZIP-Datei und kein JSON – deshalb hier ein eigener
- * fetch statt apiFetch. Fehlerantworten kommen weiterhin als JSON.
+ * Die Antwort ist eine ZIP-Datei und kein JSON, deshalb gibt es hier einen
+ * eigenen fetch statt apiFetch. Fehlerantworten kommen als JSON.
  */
 export async function exportiereBelegeAlsZip({ mandantId, von, bis }) {
   const params = new URLSearchParams({
@@ -164,10 +164,10 @@ export const fehlerText = (e) => {
   return felder || e?.data?.message || e?.message || "Unbekannter Fehler";
 };
 
-/* ── Mapping Backend ↔ Frontend ─────────────────────────────────── */
+/* Umrechnung zwischen Backend und Oberfläche */
 
-// Das Backend kennt pending / processing / analyzed; paid und corrected
-// kommen in Beispieldaten des Backend-Teams vor und gelten als erledigt.
+// Das Backend kennt pending, processing und analyzed. paid und corrected
+// kommen in Beispieldaten des Backends vor und gelten als erledigt.
 const STATUS_ZUM_BACKEND = { ausstehend: "pending", in_bearbeitung: "processing", analysiert: "analyzed" };
 const STATUS_VOM_BACKEND = {
   pending: "ausstehend", processing: "in_bearbeitung", analyzed: "analysiert",
@@ -176,7 +176,7 @@ const STATUS_VOM_BACKEND = {
 
 const FARBEN = ["#18537a", "#5b3a8a", "#0e6655", "#7d3c19", "#6b1a5c", "#1a5c3a", "#7a4a1a"];
 
-// Backend-User (Gruppe "client") → Mandant für Sidebar & Belegliste
+// Macht aus einem Backend-User der Gruppe "client" einen Mandanten für Sidebar und Belegliste
 export const userToMandant = (u, i) => ({
   id: u.id,
   name: `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.username,
@@ -186,14 +186,14 @@ export const userToMandant = (u, i) => ({
   color: FARBEN[i % FARBEN.length],
 });
 
-// "1.234,56 €" → 1234.56
+// Liest "1.234,56 €" als 1234.56
 const parseBetrag = (str) => {
   if (!str) return 0;
   const n = parseFloat(String(str).replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", "."));
   return isNaN(n) ? 0 : n;
 };
 
-// 119 / "119.00" → "119,00 €"
+// Schreibt 119 oder "119.00" als "119,00 €"
 const formatBetrag = (v) =>
     v == null || v === "" ? "" : Number(v).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
 
@@ -206,9 +206,9 @@ const isoDatum = (de) => {
 };
 
 /**
- * Backend-Dokument → Beleg für die Liste/das Detail-Modal.
- * Felder, die das Backend-Schema nicht kennt (Positionen, Kategorie,
- * angerechneter Betrag …), liegen als JSON im notes-Feld.
+ * Macht aus einem Backend-Dokument einen Beleg für Liste und Detailansicht.
+ * Felder, die das Backend-Schema nicht kennt, etwa Positionen, Kategorien
+ * oder der angerechnete Betrag, liegen als JSON im notes-Feld.
  */
 export function documentToDoc(d) {
   let extra = {};
@@ -220,15 +220,15 @@ export function documentToDoc(d) {
     apiId: d.id,
     backendDoc: true,
     name: d.original_file_name || d.file_name,
-    size: d.size_bytes ? `${Math.round(d.size_bytes / 1024)} KB` : "—",
+    size: d.size_bytes ? `${Math.round(d.size_bytes / 1024)} KB` : "-",
     type: "pdf",
     uploadedAt: deDatum(d.created_at),
     status: STATUS_VOM_BACKEND[d.status] ?? "ausstehend",
-    // Mehrere Klassifikationen je Beleg; Belege aus der Zeit mit nur einer
-    // Kategorie werden weiterhin gelesen
+    // Mehrere Klassifikationen je Beleg. Steht nur ein einzelnes category-Feld
+    // in den Notizen, wird es ebenfalls gelesen.
     kategorien: bereinigeKategorien(extra.kategorien ?? (extra.category ? [extra.category] : [])),
     amount: extra.angerechnetBetrag ?? (formatBetrag(d.total_amount) || "---"),
-    // Sicherheit der KI-Analyse in Prozent – nur bei analysierten Belegen
+    // Sicherheit der KI-Analyse in Prozent, nur bei analysierten Belegen
     confidence: extra.confidence ?? undefined,
     extractedData: {
       aussteller: d.issuer_name === "Unbekannt" ? "" : d.issuer_name || "",
@@ -248,7 +248,7 @@ export function documentToDoc(d) {
   };
 }
 
-// Belegdaten (bestätigt im Detail-Modal oder von der KI) → PATCH-Payload fürs Backend
+// Baut aus den Belegdaten, ob von Hand bestätigt oder von der KI, den PATCH-Payload fürs Backend
 export function updatePayload(editedData, kategorien = [], { status = "analysiert", confidence } = {}) {
   const liste = bereinigeKategorien(kategorien);
   return {
@@ -262,7 +262,7 @@ export function updatePayload(editedData, kategorien = [], { status = "analysier
     total_amount: parseBetrag(editedData.gesamtBetrag).toFixed(2),
     notes: JSON.stringify({
       kategorien: liste,
-      category: liste[0] ?? null,   // für ältere Auswertungen, die ein Einzelfeld erwarten
+      category: liste[0] ?? null,   // für Auswertungen, die ein Einzelfeld erwarten
       positionen: editedData.positionen ?? [],
       angerechnetBetrag: editedData.angerechnetBetrag,
       adresse: editedData.adresse || "",

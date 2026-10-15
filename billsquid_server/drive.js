@@ -6,18 +6,18 @@
  * und verschiebt zugeordnete Belege in den Mandantenordner.
  *
  * Wichtig: Das Dienstkonto hat keinen eigenen Drive-Speicher. Es kann deshalb
- * Ordner anlegen (die belegen nichts), Dateien lesen und verschieben – aber
- * keine neuen Dateien hochladen. Genau das brauchen wir hier auch nicht.
+ * Ordner anlegen (die belegen keinen Platz), Dateien lesen und verschieben,
+ * aber keine neuen Dateien hochladen. Mehr braucht es hier auch nicht.
  *
  * Einrichtung: Ordner in Google Drive anlegen und für die Dienstkonto-Adresse
  * aus service-account.json als Bearbeiter freigeben. Name über die
- * Umgebungsvariable DRIVE_ORDNER änderbar (Standard: "BillSquid").
+ * Umgebungsvariable DRIVE_ORDNER änderbar, Standard ist "BillSquid".
  */
 
 const fs   = require("fs");
 const path = require("path");
-// googleapis wird bewusst nicht hier oben geladen: Das Paket braucht allein
-// rund zweieinhalb Sekunden und verzögert damit jeden Serverstart – auch wenn
+// googleapis wird bewusst nicht hier oben geladen. Das Paket braucht allein
+// rund zweieinhalb Sekunden und würde jeden Serverstart verzögern, auch wenn
 // nie eine Drive-Anfrage kommt. Es wird beim ersten Zugriff nachgeladen.
 
 const SCHLUESSEL   = path.join(__dirname, "service-account.json");
@@ -45,7 +45,7 @@ function drive() {
 // Einfache Anführungszeichen müssen in Drive-Suchausdrücken maskiert werden
 const maskiere = (text) => String(text).replace(/'/g, "\\'");
 
-/* ── Ordner ─────────────────────────────────────────────────────── */
+/* Ordner */
 
 let basisId = null;
 
@@ -94,7 +94,7 @@ async function ordnerAnlegen(mandantenOrdner = []) {
     return angelegt;
 }
 
-/* ── Dateien ────────────────────────────────────────────────────── */
+/* Dateien */
 
 /**
  * Noch nicht zugeordnete Scans: alles, was direkt im Basisordner oder in
@@ -142,16 +142,4 @@ async function zuordnen({ fileId, ordnerName, neuerName }) {
     return { id: res.data.id, name: res.data.name, ordner: ordnerName };
 }
 
-/** Kurzer Zustandsbericht für die Einstellungsseite */
-async function status() {
-    if (!aktiv()) return { aktiv: false, grund: "Keine service-account.json vorhanden." };
-    try {
-        const basis = await basisOrdner();
-        const dateien = await listeEingang();
-        return { aktiv: true, ordner: BASIS_NAME, ordnerId: basis, imEingang: dateien.length };
-    } catch (e) {
-        return { aktiv: false, grund: e.message };
-    }
-}
-
-module.exports = { aktiv, status, listeEingang, dateiInhalt, zuordnen, ordnerAnlegen };
+module.exports = { aktiv, listeEingang, dateiInhalt, zuordnen, ordnerAnlegen };

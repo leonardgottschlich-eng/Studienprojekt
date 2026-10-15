@@ -4,12 +4,12 @@ import KategorieChips from "./KategorieChips";
 import { trefferFeld, anzeigeDatum } from "../utils/belegFilter";
 
 /**
- * Belegliste – am Schreibtisch eine Tabelle, am Handy eine Karte je Beleg.
+ * Belegliste. Am Schreibtisch eine Tabelle, am Handy eine Karte je Beleg.
  * Die sechs Spalten passen auf einem Telefon nicht nebeneinander, deshalb
  * stehen dort Name, Datum, Status und Betrag untereinander.
  *
  * Ein Klick öffnet den Beleg, das Stift-Symbol öffnet ihn gleich in der
- * Bearbeitungsansicht – dort lassen sich Name und Belegdaten ändern.
+ * Bearbeitungsansicht, in der sich Name und Belegdaten ändern lassen.
  */
 
 const SPALTEN = "2.5fr 1fr 1fr 1fr 1fr 60px";
@@ -94,7 +94,7 @@ export default function BelegListe({ docs, isMobile, query, datumBezug = "beleg"
                 <div style={{ height: "100%", width: `${conf}%`, background: confColor, borderRadius: 4 }} />
               </div>
               <span style={{ fontSize: 9.5, fontWeight: 700, color: confColor, minWidth: 24 }}>{conf}%</span>
-            </>) : <span style={{ fontSize: 10, color: "#d1d5db" }}>—</span>}
+            </>) : <span style={{ fontSize: 10, color: "#d1d5db" }}>-</span>}
           </div>
         </div>
     );

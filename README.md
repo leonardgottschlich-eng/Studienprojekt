@@ -1,9 +1,9 @@
-# BillSquid – Frontend
+# BillSquid Frontend
 
 React-Frontend (Vite) für die Belegverwaltung einer Steuerkanzlei. Die Daten
 kommen vom BillSquid-Backend der Hochschule (CodeIgniter 4 mit
-Shield-Authentifizierung). Dateien vor Ort – Scanner-Eingang, Google Drive,
-Belegarchiv – verwaltet ein kleiner Node-Server in `billsquid_server/`.
+Shield-Authentifizierung). Die Dateien vor Ort, also Scanner-Eingang, Google
+Drive und Belegarchiv, verwaltet ein kleiner Node-Server in `billsquid_server/`.
 
 ## Starten
 
@@ -48,7 +48,8 @@ Andere Ziele wählt man über Umgebungsvariablen:
 VITE_API_TARGET=http://localhost:8080 VITE_SCAN_TARGET=http://localhost:3002 npm run dev
 ```
 
-Die Endpunkte des Backends beschreibt `frontend-api.pdf` des Backend-Teams.
+Die Endpunkte des Backends beschreibt die API-Dokumentation des Backend-Teams
+(`frontend-api.pdf`).
 
 ## Aufbau
 
@@ -59,15 +60,17 @@ Die Endpunkte des Backends beschreibt `frontend-api.pdf` des Backend-Teams.
 | `src/settings.js` | Persönliche Einstellungen, zuletzt gewählte Seite und Mandant, Merkliste der KI-Demo |
 | `src/hooks/useUpload.js` | Upload ins Backend, Bilder vorher als PDF verpackt |
 | `src/lib/belegDatei.js` | Originaldatei eines Belegs laden (Backend oder Scan-Server) und herunterladen |
-| `src/lib/pdfjs.js` | pdf.js laden, PDF öffnen und Text auslesen |
+| `src/lib/pdfjs.js` | pdf.js laden und ein PDF öffnen |
 | `src/lib/jpegZuPdf.js` | Bilder (Handy-Scan, PNG, JPG …) ohne Bibliothek in ein einseitiges PDF verpacken |
 | `src/lib/kiAnalyse.js` | Simulierte KI-Analyse (siehe unten) |
 | `src/lib/stats.js` | Kennzahlen und Sortierung für die Startseiten |
 | `src/data/kiDemoBelege.js` | Vorbereitetes Ergebnis der KI-Demo (REWE-Beleg) |
+| `src/data/status.js` | Die drei Belegzustände und ihre Darstellung |
+| `src/data/kategorien.js` | Vorschlagsliste der Klassifikationen |
 | `src/utils/belegFilter.js` | Suche, Zeitraum-, Status- und Kategoriefilter der Belegliste |
 | `src/components/DashboardBerater.jsx` | Startseite der Kanzlei (Mandantenübersicht) |
 | `src/components/DashboardMandant.jsx` | Startseite der Mandant:innen |
-| `src/components/BelegListe.jsx` | Belegliste – Tabelle am Schreibtisch, Karten am Handy |
+| `src/components/BelegListe.jsx` | Belegliste, als Tabelle am Schreibtisch und als Karten am Handy |
 | `src/components/BelegSuche.jsx` | Suchfeld, Filter und Export über der Belegliste |
 | `src/components/DocDetailModal.jsx` | Beleg-Dialog mit Vorschau (pdf.js), Bearbeitung und Download |
 | `src/components/DocumentScanModal.jsx` | Kamera-Scan mit Kantenerkennung und Zuschnitt |
@@ -91,10 +94,10 @@ Das Backend kennt drei Gruppen:
 | Belege sehen, hochladen, ändern, löschen | eigene | von zugewiesenen Mandanten | alle |
 | Belege als ZIP exportieren | eigene | von aktiv zugewiesenen | alle |
 | Mandantenliste | nur sich selbst | nur zugewiesene | alle |
-| Mandant anlegen | – | laut Backend noch nicht erlaubt | ja |
-| Steuerberater ↔ Mandant zuordnen | – | – | ja |
+| Mandant anlegen | nein | nur wenn das Backend es freigibt | ja |
+| Steuerberater und Mandant zuordnen | nein | nein | ja |
 | Scanner-Eingang | eigene Scans | alle, inkl. Google Drive | alle, inkl. Google Drive |
-| Admin-Bereich der Einstellungen | – | – | ja |
+| Admin-Bereich der Einstellungen | nein | nein | ja |
 
 Eine Zuweisung zählt nur, wenn der Eintrag in `advisor_clients` den Status
 `active` hat. Ohne Zuweisung sieht eine Steuerberaterin **keine** Mandanten.
@@ -111,21 +114,21 @@ Belegen setzt das Backend die Regeln durch, bei der Benutzerliste nicht.
 Nach dem Login richtet sich die Startseite nach der Rolle
 (`istMandantenRolle` in `src/App.jsx`):
 
-* **Mandant:in** – Kennzahlen zu den eigenen Belegen (gesamt, analysiert,
+* **Mandant:in:** Kennzahlen zu den eigenen Belegen (gesamt, analysiert,
   ausstehend), darunter die fünf zuletzt eingegangenen Belege. Ein Klick
   öffnet den Beleg-Dialog. Die Mandantenauswahl in der Seitenleiste ist
   ausgeblendet.
-* **Steuerberater:in / Admin** – die eigenen Mandanten, sortiert nach
+* **Steuerberater:in und Admin:** die eigenen Mandanten, sortiert nach
   Arbeitsaufwand: Wer die meisten unerledigten Belege hat, steht oben. Neben
   jedem Mandanten stehen die Zahlen für *zu erfassen*, *in Prüfung* und
   *erledigt*. Ein Klick wechselt zum Mandanten und öffnet dessen Belegliste.
 
 Zwischen den Ansichten wechselt man über „Dashboard", „Belege" und
-„Einstellungen" in der Seitenleiste bzw. mobil in der unteren Navigation.
+„Einstellungen" in der Seitenleiste, mobil in der unteren Navigation.
 
-Beim Anmelden zeigt die App kurz „Mandanten werden geladen…". Die Demo-Daten
-aus `src/data/mockData.js` erscheinen nur, wenn das Backend nicht erreichbar
-ist (Demo-Modus).
+Beim Anmelden zeigt die App kurz „Mandanten werden geladen…". Ist das Backend
+nicht erreichbar, erscheint stattdessen ein Hinweis mit dem Knopf „Erneut
+versuchen".
 
 **Zur Zählung:** Ein eigenes Feld „geprüft" gibt es im Backend nicht. Ein Beleg
 gilt als erledigt, sobald er den Status `analyzed` hat. Den setzt das Frontend
@@ -184,7 +187,7 @@ Dialog fragt Vorname, Nachname, E-Mail und Startpasswort ab. Den vom Backend
 verlangten Anmeldenamen bildet die App aus dem Namen (`emma.schmidt`).
 Legt eine Steuerberaterin an, weist die App ihr den Mandanten gleich zu.
 
-**Stand:** `POST /api/users` ist laut Backend nur für Admins freigegeben,
+**Hinweis:** `POST /api/users` ist laut Backend nur für Admins freigegeben,
 Steuerberater bekommen einen 403-Fehler. Damit das Anlegen auch für sie
 funktioniert, muss das Backend die Rolle `tax_advisor` für die Gruppe `client`
 freigeben und die Zuweisung gleich mit anlegen. Die darf der Steuerberater
@@ -262,7 +265,7 @@ als lokales Archiv.
 | --- | --- | --- |
 | `BELEGE_PFAD` | `../../Belege` (neben dem Projekt) | Wurzel für Eingang, Archiv und `_Verworfen` |
 | `DRIVE_ORDNER` | `BillSquid` | Name des freigegebenen Ordners in Google Drive |
-| `service-account.json` | – | Schlüssel des Google-Dienstkontos |
+| `service-account.json` | keine | Schlüssel des Google-Dienstkontos |
 
 Der Belegordner liegt bewusst **außerhalb des Repositorys**, denn
 Mandantendaten gehören nicht in Git. Darin legt der Server an:
@@ -314,16 +317,14 @@ Zugangs:
 | Route | Zweck |
 | --- | --- |
 | `POST /auth/login`, `POST /auth/logout`, `GET /status` | Anmeldung und Erreichbarkeit |
-| `POST /upload?mandantNr&mandantName` | Datei in den Mandantenordner |
 | `GET /belege?mandantNr&mandantName` | Dateien im Mandantenordner |
-| `GET`/`DELETE /belege/file?mandantNr&mandantName&name` | Datei lesen bzw. löschen |
+| `GET`/`DELETE /belege/file?mandantNr&mandantName&name` | Datei lesen oder löschen |
 | `POST /belege/rename` | Datei im Mandantenordner umbenennen |
 | `GET /scan/inbox[?mandantNr]` | Scans im Eingang (optional mit `vorschlag`, mit `mandantNr` nur die eines Mandanten) |
 | `POST /scan/upload?mandantNr&mandantName` | Handy-Scan in den Eingang legen |
 | `GET /scan/file?name` | Scan aus dem Eingang lesen |
 | `POST /scan/assign` | Scan benennen und in den Mandantenordner verschieben |
 | `POST /scan/verwerfen` | Scan aus dem Eingang nach `_Verworfen` verschieben |
-| `GET /drive/status` | Ist Drive eingerichtet und erreichbar? |
 | `POST /drive/ordner` | Drive-Ordner je Mandant anlegen |
 | `GET /drive/inbox`, `GET /drive/file?id` | Scanner-Eingang in Google Drive |
 | `POST /drive/assign` | Drive-Scan in den Mandantenordner verschieben |

@@ -9,9 +9,9 @@
 
 import { kategorienVon } from "../data/kategorien";
 
-/* ── Datum ─────────────────────────────────────────────────────── */
+/* Datum */
 
-/** "01.08.2026", "5.8.2026" oder "2026-08-01" → Date (sonst null) */
+/** Liest "01.08.2026", "5.8.2026" oder "2026-08-01" als Date, sonst null */
 export function parseDatum(str) {
   if (!str) return null;
   const s = String(str).trim();
@@ -22,16 +22,16 @@ export function parseDatum(str) {
   return null;
 }
 
-/** Date → "2026-09-22" (so erwarten es die Datumsfelder und das Backend) */
+/** Schreibt ein Date als "2026-09-22", so erwarten es die Datumsfelder und das Backend */
 export const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 /**
- * Datum eines Belegs – einmal als Text für die Liste (anzeigeDatum), einmal
+ * Datum eines Belegs, einmal als Text für die Liste (anzeigeDatum) und einmal
  * als Date zum Filtern (datumFuer). Beide folgen derselben Regel, damit in
  * der Spalte dasselbe steht, wonach auch gefiltert wird.
  *
  * Beim Belegdatum wird auf das Upload-Datum zurückgegriffen, solange noch
- * keine Daten erfasst sind – sonst würden frisch hochgeladene Belege bei
+ * keine Daten erfasst sind. Sonst würden frisch hochgeladene Belege bei
  * jedem Zeitraumfilter verschwinden.
  */
 export const anzeigeDatum = (doc, bezug) =>
@@ -40,7 +40,7 @@ export const anzeigeDatum = (doc, bezug) =>
 export const datumFuer = (doc, bezug) =>
     parseDatum(anzeigeDatum(doc, bezug)) ?? parseDatum(doc.uploadedAt);
 
-/* ── Zeitraum-Schnellauswahl ───────────────────────────────────── */
+/* Zeitraum-Schnellauswahl */
 
 export const ZEITRAUM_PRESETS = [
   { id: "alle",     label: "Alle" },
@@ -50,7 +50,7 @@ export const ZEITRAUM_PRESETS = [
   { id: "vorjahr",  label: "Letztes Jahr" },
 ];
 
-/** Preset-Kennung → konkreter Zeitraum */
+/** Rechnet eine Schnellauswahl in einen konkreten Zeitraum um */
 export function presetZeitraum(id) {
   const heute = new Date();
   const jahr = heute.getFullYear();
@@ -69,7 +69,7 @@ export function presetZeitraum(id) {
   return { von: "", bis: "" };   // "alle"
 }
 
-/* ── Filterzustand ─────────────────────────────────────────────── */
+/* Filterzustand */
 
 export const LEERER_FILTER = {
   query: "",
@@ -81,15 +81,13 @@ export const LEERER_FILTER = {
   kategorie: "alle",
 };
 
-/** Anzahl gesetzter Filter (ohne Suchtext – der hat ein eigenes Feld) */
+/** Anzahl gesetzter Filter. Der Suchtext zählt nicht mit, er hat ein eigenes Feld. */
 export const aktiveFilter = (f) =>
     (f.von || f.bis ? 1 : 0) +
     (f.status && f.status !== "alle" ? 1 : 0) +
     (f.kategorie && f.kategorie !== "alle" ? 1 : 0);
 
-export const filterAktiv = (f) => !!f.query || aktiveFilter(f) > 0;
-
-/* ── Suche ─────────────────────────────────────────────────────── */
+/* Suche */
 
 /** Alle durchsuchbaren Felder eines Belegs als ein Text */
 export function belegText(doc) {
@@ -104,8 +102,8 @@ export function belegText(doc) {
 
 /**
  * Suchbegriffe zerlegen. Anführungszeichen halten eine Wortfolge zusammen:
- *   hotel berlin      → beide Wörter müssen vorkommen
- *   "motel one"       → genau diese Wortfolge
+ *   hotel berlin      beide Wörter müssen vorkommen
+ *   "motel one"       genau diese Wortfolge
  */
 export function suchbegriffe(query) {
   const begriffe = [];
@@ -118,7 +116,7 @@ export function suchbegriffe(query) {
   return begriffe;
 }
 
-/** Feld, in dem der Suchbegriff steckt – für den Treffer-Hinweis in der Liste */
+/** Feld, in dem der Suchbegriff steckt, für den Treffer-Hinweis in der Liste */
 export function trefferFeld(doc, query) {
   const [begriff] = suchbegriffe(query);
   if (!begriff || doc.name.toLowerCase().includes(begriff)) return null;
@@ -139,7 +137,7 @@ export function trefferFeld(doc, query) {
   return feld ? { label: feld[0], wert: feld[1] } : null;
 }
 
-/* ── Filtern ───────────────────────────────────────────────────── */
+/* Filtern */
 
 export function filterBelege(docs, filter = LEERER_FILTER) {
   const { query = "", von = "", bis = "", bezug = "beleg", status = "alle", kategorie = "alle" } = filter;
@@ -167,6 +165,6 @@ export function filterBelege(docs, filter = LEERER_FILTER) {
   });
 }
 
-/** Alle in den Belegen vorkommenden Klassifikationen – für die Auswahlliste */
+/** Alle in den Belegen vorkommenden Klassifikationen, für die Auswahlliste */
 export const vorhandeneKategorien = (docs) =>
     [...new Set(docs.flatMap(kategorienVon))].sort((a, b) => a.localeCompare(b, "de"));

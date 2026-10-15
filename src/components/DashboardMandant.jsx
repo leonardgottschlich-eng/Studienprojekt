@@ -13,8 +13,8 @@ const begruessung = () => {
 
 /**
  * Startseite für Mandanten: eigene Belege im Überblick und die zuletzt
- * eingegangenen Dokumente. Hochladen und Scannen laufen über die Belegseite
- * bzw. das Kamera-Symbol oben rechts.
+ * eingegangenen Dokumente. Hochgeladen wird über die Belegseite, gescannt
+ * über das Kamera-Symbol in der Kopfzeile am Handy.
  */
 export default function DashboardMandant({ user, mandant, docs = [], isMobile, onOpenDoc, onZurBelegliste }) {
   const stats = belegStats(docs);

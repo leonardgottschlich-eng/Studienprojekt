@@ -15,11 +15,11 @@ const ZUGANG = { email: "doerte@kanzlei.de", password: "billsquid123" };
 export const lokalerToken = () => sessionStorage.getItem("bs_token") || "";
 
 /**
- * Wer gerade in der App angemeldet ist – ausschließlich als Beschriftung für
+ * Wer gerade in der App angemeldet ist, ausschließlich als Beschriftung für
  * das Protokoll des Scan-Servers. Der kennt nur seinen technischen Zugang und
  * würde sonst jede Aktion derselben Kennung zuschreiben.
  *
- * Das ist keine Anmeldung: Der Wert ist eine Angabe des Browsers und für
+ * Das ist keine Anmeldung. Der Wert ist eine Angabe des Browsers und für
  * Berechtigungen nicht belastbar. Header dürfen nur ASCII enthalten, Umlaute
  * werden deshalb kodiert.
  */
@@ -30,7 +30,7 @@ function benutzerKopf() {
     const text = user.rolle ? `${user.name} (${user.rolle})` : user.name;
     return { "X-BillSquid-Benutzer": encodeURIComponent(text) };
   } catch {
-    return {};   // z. B. privater Modus ohne sessionStorage
+    return {};   // etwa im privaten Modus ohne sessionStorage
   }
 }
 
@@ -58,12 +58,12 @@ function anmelden() {
   return anmeldungLaeuft;
 }
 
-/** fetch gegen den Scan-Server – hängt den Token an und meldet sich nötigenfalls neu an */
+/** fetch gegen den Scan-Server. Hängt den Token an und meldet sich nötigenfalls neu an. */
 export async function lokalFetch(pfad, optionen = {}) {
   const senden = (token) =>
       fetch(pfad, {
-        // Immer frisch fragen – der Scanner-Eingang ändert sich laufend, eine
-        // zwischengespeicherte Antwort würde neue Scans verschlucken
+        // Immer frisch fragen. Der Scanner-Eingang ändert sich laufend, eine
+        // zwischengespeicherte Antwort würde neue Scans verschlucken.
         cache: "no-store",
         ...optionen,
         headers: {
@@ -76,7 +76,7 @@ export async function lokalFetch(pfad, optionen = {}) {
   const token = lokalerToken();
   const antwort = token ? await senden(token) : null;
 
-  // Kein Token vorhanden oder abgelehnt → einmal neu anmelden und wiederholen
+  // Fehlt der Token oder wird er abgelehnt, einmal neu anmelden und wiederholen
   if (!antwort || antwort.status === 401) {
     return senden(await anmelden());
   }

@@ -1,4 +1,4 @@
-import { STATUS_CONFIG } from "../data/mockData";
+import { STATUS_CONFIG } from "../data/status";
 
 // Solange die KI einen Beleg liest, steht statt des Status ein Hinweis darauf
 const KI_LAEUFT = { label: "KI analysiert…", color: "#6d28d9", bg: "#ede9fe", dot: "#8b5cf6" };

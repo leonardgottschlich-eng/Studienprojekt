@@ -1,17 +1,25 @@
 /**
- * Vorbereitetes Ergebnis der simulierten KI-Analyse (für die Präsentation).
+ * Vorbereitetes Ergebnis der simulierten KI-Analyse für die Vorführung.
  *
  * Eine echte KI würde die Daten aus dem Scan lesen. Hier liegen sie für einen
- * vorher ausgesuchten Beleg fest bereit. Erkannt wird ausschließlich dieser
- * eine Beleg (siehe lib/kiAnalyse.js) – jeder andere gilt als "nicht erkannt"
- * und bleibt unverändert.
- *
- * Vorlage: 05082026_1785952042639.pdf – REWE-Einkauf vom 31.07.2026
+ * ausgesuchten Beleg fest bereit: den REWE-Einkauf vom 31.07.2026
+ * (Vorlage 05082026_1785952042639.pdf).
  *
  * Welcher Beleg diese Daten bekommt, entscheidet nicht die Datei, sondern der
- * Weg: Jeder Beleg, der über Google Drive hereinkommt, gilt als der
- * vorbereitete (siehe lib/kiAnalyse.js). Für die Vorführung heißt das, den
- * Bon über den Drive-Ordner einzuspielen.
+ * Weg. Jeder Beleg, der über Google Drive hereinkommt, gilt als der
+ * vorbereitete (siehe lib/kiAnalyse.js), alle anderen bleiben unverändert.
+ * Für die Vorführung wird der Bon also über den Drive-Ordner eingespielt.
+ *
+ * Felder einer Position:
+ *   netto        Nettobetrag
+ *   mwstSatz     Steuersatz als Zahl, etwa 7 oder 19
+ *   mwstBetrag   enthaltene Umsatzsteuer
+ *   betrag       Bruttobetrag
+ *   angerechnet  ob die Position steuerlich angerechnet wird
+ *
+ * Die Summen am Ende stehen so auf dem Beleg. Die anrechenbaren Werte
+ * berechnet die Detailansicht laufend aus den angehakten Positionen, in der
+ * Liste erscheint angerechnetBetrag als Betrag.
  */
 
 export const KI_DEMO_BELEG = {
@@ -25,8 +33,8 @@ export const KI_DEMO_BELEG = {
     uhrzeit: "14:22:34",
     rechnungsnr: "2171",
     zahlungsart: "girocard (kontaktlos), Karte **** 9968",
-    // Pfand ist keine Betriebsausgabe, sondern wird bei Rückgabe erstattet –
-    // die KI nimmt die Pfandpositionen deshalb von der Anrechnung aus.
+    // Pfand ist keine Betriebsausgabe, es wird bei Rückgabe erstattet.
+    // Die KI nimmt die Pfandpositionen deshalb von der Anrechnung aus.
     positionen: [
       { bezeichnung: "ANNO 1688 KLASS.", menge: "2", einzelpreis: "2,49 €", netto: "4,65 €", mwstSatz: 7, mwstBetrag: "0,33 €", betrag: "4,98 €", angerechnet: true },
       { bezeichnung: "ANNO 1688 RUSTIK", menge: "1", einzelpreis: "2,49 €", netto: "2,33 €", mwstSatz: 7, mwstBetrag: "0,16 €", betrag: "2,49 €", angerechnet: true },

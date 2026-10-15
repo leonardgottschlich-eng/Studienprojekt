@@ -1,10 +1,10 @@
 /**
  * Klassifikationen eines Belegs.
  *
- * Ein Beleg kann mehrere Klassifikationen tragen (1:n) – eine Hotelrechnung
- * ist z. B. gleichzeitig "Reisekosten" und "Bewirtung". Gespeichert wird die
- * Liste im Feld `kategorien`; ältere Belege mit einer einzelnen `category`
- * werden von kategorienVon() weiterhin verstanden.
+ * Ein Beleg kann mehrere Klassifikationen tragen (1:n). Eine Hotelrechnung
+ * ist zum Beispiel gleichzeitig "Reisekosten" und "Bewirtung". Gespeichert
+ * wird die Liste im Feld `kategorien`. Belege mit einem einzelnen Feld
+ * `category` versteht kategorienVon() ebenfalls.
  */
 
 export const KATEGORIEN = [
@@ -22,7 +22,7 @@ export const KATEGORIEN = [
   "Sonstige Ausgaben",
 ];
 
-/** Klassifikationen eines Belegs – verträgt alte (category) und neue (kategorien) Form */
+/** Klassifikationen eines Belegs, aus dem Feld kategorien oder ersatzweise category */
 export const kategorienVon = (doc) => {
   if (Array.isArray(doc?.kategorien)) return doc.kategorien;
   return doc?.category && doc.category !== "Nicht klassifiziert" ? [doc.category] : [];
@@ -30,8 +30,8 @@ export const kategorienVon = (doc) => {
 
 /**
  * Doppelte und leere Einträge entfernen, Reihenfolge beibehalten.
- * "Nicht klassifiziert" ist nur ein Anzeigetext und wird verworfen – ältere
- * Belege haben ihn teilweise als echten Wert gespeichert.
+ * "Nicht klassifiziert" ist nur ein Anzeigetext und wird verworfen, falls er
+ * als Wert gespeichert wurde.
  */
 export const bereinigeKategorien = (liste) =>
     [...new Set(

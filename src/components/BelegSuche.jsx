@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { STATUS_CONFIG } from "../data/mockData";
+import { STATUS_CONFIG } from "../data/status";
 import { ZEITRAUM_PRESETS, presetZeitraum, aktiveFilter, LEERER_FILTER } from "../utils/belegFilter";
 
 /**
@@ -58,7 +58,7 @@ export default function BelegSuche({ filter, onChange, kategorien = [], anzahl, 
         </button>
     );
 
-    /* Export als ZIP – das Backend filtert dabei nur nach Belegdatum */
+    /* Export als ZIP. Das Backend filtert dabei nur nach Belegdatum. */
     const exportBereit = !!anzahl && !exportLaeuft;
     const exportKnopf = onExport && (
         <button onClick={() => onExport(filter)} disabled={!exportBereit}
@@ -74,7 +74,7 @@ export default function BelegSuche({ filter, onChange, kategorien = [], anzahl, 
     return (
         <>
             {/* Kopfzeile. Am Telefon zwei Zeilen: oben Überschrift und Export,
-                darunter Suche und Filter – nebeneinander wird es zu eng. */}
+                darunter Suche und Filter, nebeneinander wird es zu eng. */}
             {isMobile ? (
                 <div style={{ padding: "14px 16px", borderBottom: "1px solid #f0ece4", display: "flex", flexDirection: "column", gap: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>

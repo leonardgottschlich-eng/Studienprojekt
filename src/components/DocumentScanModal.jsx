@@ -3,9 +3,9 @@ import { scanZuPdfDatei, dataUrlZuBytes } from '../lib/jpegZuPdf';
 
 export default function DocumentScanModal({ onClose, onCapture }) {
   const videoRef      = useRef(null);
-  const smallCanvas   = useRef(null); // 50%-Canvas für OpenCV-Erkennung
-  const svgOverlayRef = useRef(null); // SVG-Overlay für Rahmen-Zeichnung
-  const frozenCanvas  = useRef(null); // Eingefriertes Foto für adjust-Phase
+  const smallCanvas   = useRef(null); // Bild in halber Auflösung für die Erkennung
+  const svgOverlayRef = useRef(null); // Rahmen um das erkannte Dokument
+  const frozenCanvas  = useRef(null); // Aufgenommenes Foto zum Zuschneiden
   const streamRef     = useRef(null);
   const intervalRef   = useRef(null);
   const scannerRef    = useRef(null);
@@ -18,7 +18,7 @@ export default function DocumentScanModal({ onClose, onCapture }) {
   const [finalImg, setFinalImg] = useState(null);   // base64 nach Zuschnitt
   const [imgDims, setImgDims]   = useState({ w: 1, h: 1 }); // Bilddimensionen als State
 
-  // ── Init ──────────────────────────────────────────────────────
+  // Wartet, bis OpenCV und jscanify geladen sind, und startet dann die Kamera
   useEffect(() => {
     const tryInit = () => {
       if (window.jscanify && window.cv && typeof window.cv.Mat === "function") {
@@ -31,14 +31,14 @@ export default function DocumentScanModal({ onClose, onCapture }) {
     if (tryInit()) return;
     const poll = setInterval(() => { if (tryInit()) clearInterval(poll); }, 250);
     return () => clearInterval(poll);
-    // Nur einmal beim Öffnen – startCamera wird bei jedem Rendern neu erzeugt
+    // Läuft nur einmal beim Öffnen, startCamera wird bei jedem Rendern neu erzeugt
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const startCamera = async () => {
     // Die Kamera gibt der Browser nur in einem sicheren Kontext frei: über
-    // HTTPS oder auf localhost. Über die Netzwerkadresse (http://192.168.…)
-    // fehlt navigator.mediaDevices komplett – dann hilft keine Berechtigung.
+    // HTTPS oder auf localhost. Über eine Netzwerkadresse mit http fehlt
+    // navigator.mediaDevices ganz, daran ändert auch eine Berechtigung nichts.
     if (!navigator.mediaDevices?.getUserMedia) {
       alert("Die Kamera ist nur über HTTPS oder auf localhost verfügbar.\n\n"
           + "Starte den Dev-Server ohne NO_SSL=1, dann läuft die Seite über https://.");
@@ -64,9 +64,9 @@ export default function DocumentScanModal({ onClose, onCapture }) {
     }
   };
 
-  // ── Live-Erkennung ────────────────────────────────────────────
-  // OpenCV läuft auf 50%-Canvas → 4x weniger Pixel → deutlich flüssiger
-  // Video selbst wird nativ angezeigt ohne Canvas-Kopie
+  // Live-Erkennung des Dokuments. OpenCV arbeitet auf halber Auflösung, das
+  // sind ein Viertel der Pixel und hält die Vorschau flüssig. Das Video selbst
+  // zeigt der Browser direkt an.
   const startDetection = () => {
     const video = videoRef.current;
     const small = smallCanvas.current;
@@ -77,7 +77,6 @@ export default function DocumentScanModal({ onClose, onCapture }) {
     intervalRef.current = setInterval(() => {
       if (video.readyState < 2) return;
       const vw = video.videoWidth, vh = video.videoHeight;
-      // Halbe Auflösung für OpenCV
       small.width  = Math.round(vw / 2);
       small.height = Math.round(vh / 2);
       small.getContext("2d").drawImage(video, 0, 0, small.width, small.height);
@@ -90,18 +89,17 @@ export default function DocumentScanModal({ onClose, onCapture }) {
         const pts = sc.getCornerPoints(contour, mat);
         if (!pts?.topLeftCorner) { clearSvg(svg); return; }
 
-        // Koordinaten auf 100% hochskalieren
+        // Koordinaten zurück auf die volle Auflösung rechnen
         const scale = 2;
         const tl = { x: pts.topLeftCorner.x    * scale, y: pts.topLeftCorner.y    * scale };
         const tr = { x: pts.topRightCorner.x   * scale, y: pts.topRightCorner.y   * scale };
         const br = { x: pts.bottomRightCorner.x * scale, y: pts.bottomRightCorner.y * scale };
         const bl = { x: pts.bottomLeftCorner.x  * scale, y: pts.bottomLeftCorner.y  * scale };
 
-        // SVG-Overlay aktualisieren (kein Canvas-drawImage nötig → flüssig)
         drawSvgFrame(svg, tl, tr, br, bl, vw, vh);
       } catch { clearSvg(svg); }
       finally  { try { mat?.delete(); } catch { /* schon freigegeben */ } }
-    }, 80); // ~12 fps reicht für Erkennung
+    }, 80); // etwa 12 Bilder pro Sekunde reichen für die Erkennung
   };
 
   const clearSvg = (svg) => { if (svg) svg.innerHTML = ""; };
@@ -121,7 +119,7 @@ export default function DocumentScanModal({ onClose, onCapture }) {
     streamRef.current?.getTracks().forEach((t) => t.stop());
   };
 
-  // ── Foto aufnehmen → adjust-Phase ────────────────────────────
+  // Foto aufnehmen und danach die Ecken anpassen lassen
   const capture = () => {
     stopDetection();
     clearSvg(svgOverlayRef.current);
@@ -136,7 +134,7 @@ export default function DocumentScanModal({ onClose, onCapture }) {
     fc.height = video.videoHeight;
     fc.getContext("2d").drawImage(video, 0, 0);
     streamRef.current?.getTracks().forEach((t) => (t.enabled = false));
-    setImgDims({ w: fc.width, h: fc.height }); // State triggert Re-render
+    setImgDims({ w: fc.width, h: fc.height });
 
     // Ecken mit halber Auflösung erkennen, dann hochskalieren
     const small = smallCanvas.current;
@@ -164,7 +162,7 @@ export default function DocumentScanModal({ onClose, onCapture }) {
     } catch (e) { console.warn("Eckerkennung:", e); }
     finally { try { mat?.delete(); } catch { /* schon freigegeben */ } }
 
-    // Fallback: Ecken = Bildecken mit 5% Inset
+    // Ohne erkanntes Dokument liegen die Ecken knapp innerhalb des Bildrands
     if (!detectedCorners) {
       const w = fc.width, h = fc.height, m = Math.min(w, h) * 0.05;
       detectedCorners = { tl:{x:m,y:m}, tr:{x:w-m,y:m}, br:{x:w-m,y:h-m}, bl:{x:m,y:h-m} };
@@ -174,7 +172,7 @@ export default function DocumentScanModal({ onClose, onCapture }) {
     setPhase("adjust");
   };
 
-  // ── Drag-Logik für Eckpunkte ──────────────────────────────────
+  // Ecken mit Maus oder Finger verschieben
   const KEYS = ["tl", "tr", "br", "bl"];
   const HANDLE = 28; // Griff-Radius in px
 
@@ -200,7 +198,7 @@ export default function DocumentScanModal({ onClose, onCapture }) {
 
   const onPointerUp = () => setDragging(null);
 
-  // ── Zuschnitt anwenden ────────────────────────────────────────
+  // Dokument entlang der Ecken ausschneiden und gerade ziehen
   const applyExtract = () => {
     const fc  = frozenCanvas.current;
     const sc  = scannerRef.current;
@@ -226,7 +224,7 @@ export default function DocumentScanModal({ onClose, onCapture }) {
       }
     } catch (e) { console.warn("extractPaper:", e); }
 
-    // Fallback: Foto ohne Zuschnitt
+    // Klappt der Zuschnitt nicht, wird das ganze Foto verwendet
     setFinalImg(fc.toDataURL("image/jpeg", 0.93));
     setPhase("preview");
   };
@@ -245,8 +243,8 @@ export default function DocumentScanModal({ onClose, onCapture }) {
     startDetection();
   };
 
-  // Der Scan geht als PDF weiter: So nimmt ihn das Backend an und er landet
-  // wie jeder andere Beleg in der Belegliste, nicht nur im lokalen Archiv.
+  // Der Scan geht als PDF weiter. So nimmt ihn das Backend an und er landet
+  // wie jeder andere Beleg in der Belegliste.
   const confirm = () => {
     const name = `Scan_${Date.now()}`;
     let file;
@@ -263,7 +261,6 @@ export default function DocumentScanModal({ onClose, onCapture }) {
     onClose();
   };
 
-  // ── Render ────────────────────────────────────────────────────
   const imgW = imgDims.w;
   const imgH = imgDims.h;
 
@@ -296,16 +293,16 @@ export default function DocumentScanModal({ onClose, onCapture }) {
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12 }}>
                 <div style={{ width: 36, height: 36, border: "3px solid #fd8f19", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
                 <p style={{ color: "#7ab8d0", fontSize: 13 }}>OpenCV wird geladen…</p>
-                <p style={{ color: "#4a8aaa", fontSize: 11, opacity: 0.7 }}>Kann beim ersten Mal 10–20 Sek. dauern</p>
+                <p style={{ color: "#4a8aaa", fontSize: 11, opacity: 0.7 }}>Kann beim ersten Mal 10 bis 20 Sekunden dauern</p>
                 <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
               </div>
           )}
 
-          {/* Live-Video – nativ, kein Canvas-Copy → flüssig */}
+          {/* Live-Video */}
           <video ref={videoRef} autoPlay playsInline muted
                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", display: phase === "scanning" ? "block" : "none" }} />
 
-          {/* SVG-Overlay: Dokumentrahmen live */}
+          {/* Rahmen um das erkannte Dokument */}
           <svg ref={svgOverlayRef} preserveAspectRatio="xMidYMid meet"
                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: phase === "scanning" ? "block" : "none", pointerEvents: "none" }} />
 
@@ -322,7 +319,7 @@ export default function DocumentScanModal({ onClose, onCapture }) {
           <canvas ref={smallCanvas}   style={{ display: "none" }} />
           <canvas ref={frozenCanvas}  style={{ display: "none" }} />
 
-          {/* ── Adjust-Phase: Foto + verschiebbare Ecken ── */}
+          {/* Aufgenommenes Foto mit verschiebbaren Ecken */}
           {phase === "adjust" && corners && (
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <div style={{ position: "relative", width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -331,13 +328,11 @@ export default function DocumentScanModal({ onClose, onCapture }) {
                       alt="Foto"
                       style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }}
                   />
-                  {/* SVG-Overlay mit ziehbaren Ecken */}
                   <svg
                       viewBox={`0 0 ${imgW} ${imgH}`}
                       preserveAspectRatio="xMidYMid meet"
                       style={{ position: "absolute", inset: 0, width: "100%", height: "100%", touchAction: "none", cursor: dragging ? "grabbing" : "default" }}
                   >
-                    {/* Polygon-Fläche */}
                     <polygon
                         points={`${corners.tl.x},${corners.tl.y} ${corners.tr.x},${corners.tr.y} ${corners.br.x},${corners.br.y} ${corners.bl.x},${corners.bl.y}`}
                         fill="rgba(253,143,25,0.12)"
@@ -345,11 +340,11 @@ export default function DocumentScanModal({ onClose, onCapture }) {
                         strokeWidth="3"
                         strokeLinejoin="round"
                     />
-                    {/* Kantenlinien extra dick für Sichtbarkeit */}
+                    {/* Gestrichelte Kanten, damit der Rahmen auf jedem Hintergrund sichtbar bleibt */}
                     {[[corners.tl,corners.tr],[corners.tr,corners.br],[corners.br,corners.bl],[corners.bl,corners.tl]].map(([a,b],i) => (
                         <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#fd8f19" strokeWidth="3" strokeDasharray="10 6" />
                     ))}
-                    {/* Ziehbare Griffe */}
+                    {/* Griffe mit größerer unsichtbarer Trefferfläche */}
                     {KEYS.map((key) => (
                         <g key={key}
                            onMouseDown={onPointerDown(key)}
@@ -357,8 +352,6 @@ export default function DocumentScanModal({ onClose, onCapture }) {
                            style={{ cursor: "grab" }}>
                           <circle cx={corners[key].x} cy={corners[key].y} r={HANDLE + 10} fill="transparent" />
                           <circle cx={corners[key].x} cy={corners[key].y} r={HANDLE} fill="#fd8f19" stroke="#fff" strokeWidth="3" />
-                          <text x={corners[key].x} y={corners[key].y + 5} textAnchor="middle" fontSize={HANDLE * 0.8} fill="#0b2e44" fontWeight="bold" style={{userSelect:"none"}}>
-                          </text>
                         </g>
                     ))}
                   </svg>
@@ -406,129 +399,5 @@ export default function DocumentScanModal({ onClose, onCapture }) {
           )}
         </div>
       </div>
-  );
-}
-
-/* ── Confidence Ring ─────────────────────────────────────────── */
-function ConfidenceRing({ value }) {
-  const r = 36, circ = 2 * Math.PI * r;
-  const dash = (value / 100) * circ;
-  const color = value >= 85 ? "#16a34a" : value >= 65 ? "#d97706" : "#dc2626";
-  const bg = value >= 85 ? "#dcfce7" : value >= 65 ? "#fef3c7" : "#fee2e2";
-  const label = value >= 85 ? "Hoch" : value >= 65 ? "Mittel" : "Niedrig";
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-      <div style={{ position: "relative", width: 88, height: 88 }}>
-        <svg width="88" height="88" viewBox="0 0 88 88">
-          <circle cx="44" cy="44" r={r} fill="none" stroke="#f0ece4" strokeWidth="8" />
-          <circle cx="44" cy="44" r={r} fill="none" stroke={color} strokeWidth="8"
-            strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
-            transform="rotate(-90 44 44)" style={{ transition: "stroke-dasharray .6s ease" }} />
-        </svg>
-        <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ fontSize: 18, fontWeight: 800, color, lineHeight: 1 }}>{value}%</span>
-        </div>
-      </div>
-      <span style={{ fontSize: 11, fontWeight: 600, color, background: bg, padding: "3px 10px", borderRadius: 12 }}>
-        KI-Konfidenz: {label}
-      </span>
-      <p style={{ fontSize: 10, color: "#9ca3af", textAlign: "center", maxWidth: 160, lineHeight: 1.4 }}>
-        Plausibilitätsscore der extrahierten Belegdaten
-      </p>
-    </div>
-  );
-}
-
-/* ── Scan Preview ────────────────────────────────────────────── */
-function ScanPreview({ doc }) {
-  if (doc.scanPreview === "totalenergies") {
-    return (
-      <div style={{ background: "#fff", borderRadius: 4, padding: "28px 24px", fontFamily: "'Courier New', monospace", fontSize: 11.5, lineHeight: 1.7, color: "#1a1a1a", boxShadow: "0 2px 12px rgba(0,0,0,.08)", minHeight: "100%", filter: "contrast(1.05)", position: "relative" }}>
-        <div style={{ position: "absolute", top: 10, left: 10, width: 30, height: 3, background: "#888", borderRadius: 2, transform: "rotate(-10deg)" }} />
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontWeight: 700 }}>TotalEnergies Mertert</div>
-          <div>48, Route de Wasserbillig</div>
-          <div>L-6686 Mertert</div>
-          <div>Tel: 00352-748478</div>
-          <div style={{ fontSize: 10, color: "#555" }}>Öffnung: Montag bis Sonntag 6h00–22h00</div>
-          <div>MwSt-Nr: LU18678765</div>
-        </div>
-        <div style={{ textAlign: "center", fontWeight: 800, fontSize: 13, letterSpacing: 1, marginBottom: 4 }}>KUNDENBELEG</div>
-        <div style={{ textAlign: "center", marginBottom: 12, fontSize: 10 }}>Genehmigt</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: "0 8px", borderTop: "1px solid #ccc", paddingTop: 6, marginBottom: 6 }}>
-          <span style={{ fontSize: 10, fontWeight: 700 }}>ARTIKEL</span><span style={{ fontSize: 10, fontWeight: 700 }}>MWST</span><span style={{ fontSize: 10, fontWeight: 700 }}>BETRAG</span>
-          <span>*Eurosuper</span><span>4</span><span>€ 70,73</span>
-          <span style={{ fontSize: 9, color: "#555", gridColumn: "1/4" }}>(ZP 5; 39,45 l × € 1,793/l)</span>
-          <span>MONSTER JUICE VIK. B</span><span>1</span><span>€ 1,99</span>
-        </div>
-        <div style={{ borderTop: "1px dashed #aaa", marginBottom: 6 }} />
-        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 13, marginBottom: 10 }}>
-          <span>SUMME</span><span>€ 72,72</span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-          <span>Mastercard</span><span>€ 72,72</span>
-        </div>
-        <div style={{ fontSize: 9.5, color: "#444", borderTop: "1px solid #ccc", paddingTop: 8, marginBottom: 8 }}>
-          <div>MASTERCARD: 537428******2640 OT</div>
-          <div>PAN Folgenummer: 00</div>
-          <div>Rest.: Kontaktlos bearbeitet</div>
-          <div>Autorisierung: On-line</div>
-          <div>PIN geprüft</div>
-          <div>STAN: 147965 | Autor.-code: 134908</div>
-          <div>Händler ID: ***77187</div>
-          <div>VERKAUF – Genehmigt</div>
-        </div>
-        <div style={{ borderTop: "1px solid #ccc", paddingTop: 8, marginBottom: 8 }}>
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>MASTERCARD</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", fontSize: 9.5, gap: 2 }}>
-            <span style={{ fontWeight: 600 }}>MwSt.</span><span style={{ fontWeight: 600 }}>Art %</span><span style={{ fontWeight: 600 }}>Netto</span><span style={{ fontWeight: 600 }}>Betrag</span>
-            <span>4</span><span>17,00</span><span>€ 60,45</span><span>€ 10,28</span>
-            <span>1</span><span>3,00</span><span>€ 1,93</span><span>€ 0,06</span>
-          </div>
-        </div>
-        <div style={{ fontSize: 9.5, color: "#555", borderTop: "1px solid #ccc", paddingTop: 8 }}>
-          <div>01-05-2026 13:49:21 – T4 0943120093</div>
-          <div>12-342944-65469427 / 1882</div>
-        </div>
-        <div style={{ marginTop: 14, fontSize: 9, color: "#777", borderTop: "1px dashed #ccc", paddingTop: 8, textAlign: "center" }}>
-          <div>Keine Rückerstattung</div>
-          <div>Umtausch innerhalb von 15 Tagen</div>
-          <div style={{ marginTop: 6 }}>Dieser Beleg gilt als Rechnung</div>
-          <div>Merci et bonne route 🚗</div>
-        </div>
-      </div>
-    );
-  }
-
-  // Generische Scan-Vorschau für alle anderen Belege
-  const lines = [
-    { w: "60%", bold: true }, { w: "40%" }, { w: "50%" }, { w: "30%" }, { w: "0%", h: 10 },
-    { w: "55%", bold: true, center: true }, { w: "0%", h: 8 },
-    { w: "100%", thin: true }, { w: "90%" }, { w: "75%" }, { w: "85%" }, { w: "70%" },
-    { w: "100%", thin: true }, { w: "0%", h: 8 },
-    { w: "50%", bold: true }, { w: "0%", h: 12 },
-    { w: "95%" }, { w: "80%" }, { w: "88%" }, { w: "72%" }, { w: "0%", h: 8 },
-    { w: "100%", thin: true },
-    { w: "40%", bold: true }, { w: "55%" }, { w: "45%" },
-    { w: "0%", h: 10 }, { w: "60%", thin: true }, { w: "35%", bold: true, right: true },
-    { w: "0%", h: 16 }, { w: "70%", thin: true },
-    { w: "55%" }, { w: "48%" }, { w: "62%" },
-  ];
-  return (
-    <div style={{ background: "#fff", borderRadius: 4, padding: "28px 24px", boxShadow: "0 2px 12px rgba(0,0,0,.08)", minHeight: "100%", position: "relative" }}>
-      <div style={{ position: "absolute", top: 10, left: 10, width: 26, height: 3, background: "#aaa", borderRadius: 2, transform: "rotate(-8deg)" }} />
-      {lines.map((l, i) => l.w === "0%" ? (
-        <div key={i} style={{ height: l.h }} />
-      ) : (
-        <div key={i} style={{
-          height: l.bold ? 9 : l.thin ? 1 : 7, width: l.w,
-          background: l.thin ? "#ddd" : l.bold ? "#2a2a2a" : "#888",
-          borderRadius: 3, marginBottom: l.bold ? 7 : 5,
-          marginLeft: l.right ? "auto" : l.center ? "auto" : 0,
-          marginRight: l.right ? 0 : l.center ? "auto" : 0,
-          opacity: l.thin ? 1 : undefined,
-        }} />
-      ))}
-    </div>
   );
 }

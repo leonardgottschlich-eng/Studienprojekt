@@ -31,7 +31,7 @@ export default defineConfig([
     files: ['vite.config.js', 'scripts/**/*.{js,mjs}', 'billsquid_server/**/*.js'],
     languageOptions: { globals: globals.node },
   },
-  // Einstiegspunkt – wird nie per Fast Refresh neu geladen
+  // Der Einstiegspunkt wird nie per Fast Refresh neu geladen
   {
     files: ['src/main.jsx'],
     rules: { 'react-refresh/only-export-components': 'off' },

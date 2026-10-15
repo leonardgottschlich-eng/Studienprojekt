@@ -3,7 +3,7 @@ import MandantAvatar from "./MandantAvatar";
 import StatTile from "./StatTile";
 import { belegStats, mandantenNachAufwand } from "../lib/stats";
 
-/** Kleines Zahlen-Etikett je Belegzustand, z. B. "3 zu erfassen". */
+/** Kleines Zahlen-Etikett je Belegzustand, etwa "3 zu erfassen". */
 function Zaehler({ wert, label, farbe, hintergrund }) {
   return (
       <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 20, background: wert ? hintergrund : "#f6f6f4", color: wert ? farbe : "#b6bcc4", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
@@ -33,7 +33,7 @@ export default function DashboardBerater({ user, mandanten = [], allDocs = {}, s
 
   // Nach Arbeitsaufwand sortiert: die meisten unerledigten Belege zuerst.
   // "Unerledigt" zählt auch Belege in Prüfung mit, nicht nur die noch
-  // nicht erfassten – siehe src/lib/stats.js.
+  // nicht erfassten (siehe src/lib/stats.js).
   const sortiert = mandantenNachAufwand(mandanten, allDocs).filter(({ mandant }) =>
       mandant.name.toLowerCase().includes(suche.toLowerCase()) ||
       mandant.nr.toLowerCase().includes(suche.toLowerCase())
@@ -53,6 +53,14 @@ export default function DashboardBerater({ user, mandanten = [], allDocs = {}, s
                 ? <>Es {ausstehend === 1 ? "wartet" : "warten"} <span style={{ fontWeight: 600, color: "#b45309" }}>{ausstehend} Beleg{ausstehend !== 1 ? "e" : ""}</span> auf Bearbeitung.</>
                 : "Alle Belege sind bearbeitet."}
           </p>
+          {/* Ließ sich die Zuordnung zur Steuerberater:in nicht abrufen, sind
+              vorsichtshalber alle Mandanten sichtbar */}
+          {zuordnungUnbekannt && (
+              <p style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 11.5, color: "#b45309" }}>
+                <i className="bi bi-exclamation-triangle" />
+                Ihre Mandantenzuordnung ließ sich nicht abrufen, deshalb werden alle Mandanten angezeigt.
+              </p>
+          )}
         </div>
 
         {/* Kennzahlen */}
@@ -71,9 +79,7 @@ export default function DashboardBerater({ user, mandanten = [], allDocs = {}, s
                   {scanInboxCount} Scan{scanInboxCount !== 1 ? "s" : ""} im Eingang
                 </div>
                 <div style={{ fontSize: 11.5, color: "#92400e" }}>
-                  {zuordnungUnbekannt
-                      ? "Kein Mandant erkannt – bitte von Hand zuordnen"
-                      : "Benennen und einem Mandanten zuordnen"}
+                  Benennen und einem Mandanten zuordnen
                 </div>
               </div>
               <button onClick={onScannerEingang}

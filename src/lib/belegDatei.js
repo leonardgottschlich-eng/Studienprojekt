@@ -2,9 +2,9 @@ import { getApiToken } from "../api";
 import { lokalFetch } from "../localServer";
 
 /**
- * Originaldatei eines Belegs als Blob – aus dem Backend oder aus dem
- * Mandantenordner des Scan-Servers. fetch statt <img src>, weil beide Server
- * einen Auth-Header verlangen.
+ * Originaldatei eines Belegs als Blob, aus dem Backend oder aus dem
+ * Mandantenordner des Scan-Servers. Geholt wird sie per fetch statt über
+ * <img src>, weil beide Server einen Auth-Header verlangen.
  */
 export async function ladeBelegDatei(doc, mandant) {
   const res = doc.backendDoc
@@ -21,8 +21,8 @@ export async function ladeBelegDatei(doc, mandant) {
  *
  * Ein direkter Link auf die Server-Adresse geht nicht: Beide Server verlangen
  * einen Auth-Header, den ein <a href> nicht mitschickt. Deshalb wird der Inhalt
- * geholt und über eine kurzlebige Objekt-URL an den Browser gereicht – das hat
- * den Nebeneffekt, dass der sprechende Name aus der App als Dateiname dient.
+ * geholt und über eine kurzlebige Objekt-URL an den Browser gereicht. Dabei
+ * dient auch gleich der Name aus der App als Dateiname.
  */
 export function speichereBlob(blob, dateiName) {
   const url = URL.createObjectURL(blob);

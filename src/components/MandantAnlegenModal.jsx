@@ -5,8 +5,8 @@ import { mandantAnlegen, alsAnmeldename, fehlerText } from "../api";
  * Dialog zum Anlegen eines Mandanten.
  *
  * Als Steuerberater:in wird der neue Mandant der eigenen Kennung zugewiesen,
- * damit er anschließend in der eigenen Liste steht. Die Schnittstelle dahinter
- * steckt in api.js (mandantAnlegen) – das Backend baut sie gerade erst.
+ * damit er anschließend in der eigenen Liste steht. Die Aufrufe ans Backend
+ * stecken in api.js (mandantAnlegen).
  */
 
 const LEER = { vorname: "", nachname: "", email: "", passwort: "" };
@@ -31,13 +31,13 @@ export default function MandantAnlegenModal({ istBerater, beraterId, isMobile, o
       const { zuweisungOffen } = await mandantAnlegen(werte, istBerater ? beraterId : null);
       onAngelegt?.();
       showNotification?.(zuweisungOffen
-          ? `${werte.vorname} ${werte.nachname} angelegt – erscheint nach der Zuweisung durch einen Administrator`
-          : `Mandant ${werte.vorname} ${werte.nachname} angelegt ✓`, zuweisungOffen ? "info" : "success");
+          ? `${werte.vorname} ${werte.nachname} angelegt, erscheint nach der Zuweisung durch einen Administrator`
+          : `Mandant ${werte.vorname} ${werte.nachname} angelegt`, zuweisungOffen ? "info" : "success");
       onClose();
     } catch (e) {
       const meldung =
-          e.status === 403 ? "Nur Administratoren dürfen Mandanten anlegen – das Backend muss die Rolle noch freigeben."
-          : e.status === 404 ? "Das Backend kennt das Anlegen von Mandanten noch nicht."
+          e.status === 403 ? "Nur Administratoren dürfen Mandanten anlegen. Für diese Rolle ist das im Backend nicht freigegeben."
+          : e.status === 404 ? "Das Backend bietet das Anlegen von Mandanten nicht an."
           : `Anlegen fehlgeschlagen: ${fehlerText(e)}`;
       showNotification?.(meldung, "error");
       setLaeuft(false);
@@ -81,11 +81,11 @@ export default function MandantAnlegenModal({ istBerater, beraterId, isMobile, o
               ))}
             </div>
 
-            {/* Das Backend verlangt einen Anmeldenamen – er wird aus dem Namen
-                gebildet und hier gezeigt, damit er nicht überrascht */}
+            {/* Das Backend verlangt einen Anmeldenamen. Er wird aus dem Namen
+                gebildet und hier gezeigt, damit er nicht überrascht. */}
             {(werte.vorname.trim() || werte.nachname.trim()) && (
                 <p style={{ fontSize: 11, color: "#6b7280", marginTop: 12 }}>
-                  Anmeldename: <span style={{ fontFamily: "monospace", color: "#18537a" }}>{alsAnmeldename(werte.vorname, werte.nachname) || "—"}</span>
+                  Anmeldename: <span style={{ fontFamily: "monospace", color: "#18537a" }}>{alsAnmeldename(werte.vorname, werte.nachname) || "-"}</span>
                 </p>
             )}
 
@@ -93,7 +93,7 @@ export default function MandantAnlegenModal({ istBerater, beraterId, isMobile, o
               {istBerater
                   ? "Der Mandant wird Ihnen zugewiesen und erscheint danach in Ihrer Liste. "
                   : "Die Zuordnung zu einer Steuerberater:in nehmen Sie in den Einstellungen vor. "}
-              Er meldet sich mit E-Mail und Startpasswort an – geben Sie ihm das Passwort persönlich
+              Er meldet sich mit E-Mail und Startpasswort an. Geben Sie ihm das Passwort persönlich
               weiter, die App verschickt keine Einladung.
             </p>
           </div>

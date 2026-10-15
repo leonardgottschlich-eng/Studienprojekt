@@ -1,4 +1,4 @@
-/* Global reset – kein schwarzer Rand */
+/* Einheitlicher Ausgangszustand ohne Browser-Ränder */
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;

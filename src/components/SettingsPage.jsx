@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "../api";
 import { istAdmin } from "../settings";
 
-/* ── Bausteine im Stil der Belegverwaltung ─────────────────────── */
+/* Bausteine im Stil der Belegverwaltung */
 
 function Karte({ icon, titel, beschreibung, nurAdmin, children }) {
   return (
@@ -114,7 +114,7 @@ async function holeAdminDaten() {
   }
 }
 
-/* ── Einstellungsseite ─────────────────────────────────────────── */
+/* Einstellungsseite */
 
 export default function SettingsPage({ user, einstellungen, setEinstellungen, showNotification, isMobile }) {
   const admin = istAdmin(user);
@@ -129,8 +129,8 @@ export default function SettingsPage({ user, einstellungen, setEinstellungen, sh
 
   const setzeWert = (schluessel, wert) => setEinstellungen((prev) => ({ ...prev, [schluessel]: wert }));
 
-  // Beim Öffnen der Seite einmal prüfen; das Ergebnis kommt erst nach den
-  // Netzwerkabfragen in den State (kein synchrones setState im Effekt).
+  // Beim Öffnen der Seite einmal prüfen. Das Ergebnis kommt erst nach den
+  // Netzwerkabfragen in den State, nicht synchron im Effekt.
   useEffect(() => {
     let abgebrochen = false;
     ermittleVerbindungen().then((status) => { if (!abgebrochen) setVerbindung(status); });
@@ -173,7 +173,7 @@ export default function SettingsPage({ user, einstellungen, setEinstellungen, sh
       });
       setNeu({ advisor: "", client: "" });
       await ladeAdminDaten();
-      showNotification("Zuordnung angelegt ✓");
+      showNotification("Zuordnung angelegt");
     } catch (e) {
       showNotification(`Anlegen fehlgeschlagen: ${e.message}`, "error");
     }
@@ -188,7 +188,7 @@ export default function SettingsPage({ user, einstellungen, setEinstellungen, sh
         body: { status: z.status === "active" ? "inactive" : "active" },
       });
       await ladeAdminDaten();
-      showNotification("Status geändert ✓");
+      showNotification("Status geändert");
     } catch (e) {
       showNotification(`Änderung fehlgeschlagen: ${e.message}`, "error");
     }
@@ -213,7 +213,7 @@ export default function SettingsPage({ user, einstellungen, setEinstellungen, sh
   return (
       <div style={{ width: "100%", maxWidth: 900 }}>
 
-        {/* Header */}
+        {/* Kopfzeile */}
         <div style={{ marginBottom: 24 }}>
           {!isMobile && <h1 style={{ fontFamily: "'DM Serif Display',serif", fontSize: 26, color: "#0b2e44", fontWeight: 400, marginBottom: 3 }}>Einstellungen</h1>}
           <p style={{ color: "#6b7280", fontSize: 13 }}>
@@ -225,16 +225,16 @@ export default function SettingsPage({ user, einstellungen, setEinstellungen, sh
         {/* Profil */}
         <Karte icon="bi-person-circle" titel="Profil" beschreibung="Stammdaten aus der Benutzerverwaltung des Backends">
           <Zeile titel="Name">
-            <span style={wertStil}>{user?.name || "—"}</span>
+            <span style={wertStil}>{user?.name || "-"}</span>
           </Zeile>
           <Zeile titel="E-Mail">
-            <span style={wertStil}>{user?.email || "—"}</span>
+            <span style={wertStil}>{user?.email || "-"}</span>
           </Zeile>
           <Zeile titel="Rolle" hinweis="Bestimmt, welche Einstellungen und Belege sichtbar sind">
             <span>{(user?.groups || []).map((g) => <GruppenChip key={g} gruppe={g} />)}</span>
           </Zeile>
           <Zeile titel="Benutzer-ID" letzte>
-            <span style={{ ...wertStil, fontFamily: "monospace", color: "#6b7280" }}>#{user?.id ?? "—"}</span>
+            <span style={{ ...wertStil, fontFamily: "monospace", color: "#6b7280" }}>#{user?.id ?? "-"}</span>
           </Zeile>
         </Karte>
 
@@ -281,7 +281,7 @@ export default function SettingsPage({ user, einstellungen, setEinstellungen, sh
           </Zeile>
         </Karte>
 
-        {/* ── Ab hier nur für Administratoren ── */}
+        {/* Ab hier nur für Administratoren */}
         {admin ? (
             <>
               <Karte icon="bi-people" titel="Benutzer" beschreibung={`${benutzer.length} Konten im Backend`} nurAdmin>

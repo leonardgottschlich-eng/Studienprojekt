@@ -1,10 +1,10 @@
 /**
- * Handy-Scan (JPEG) → PDF.
+ * Macht aus einem Handy-Scan (JPEG) ein PDF.
  *
- * Das Backend nimmt nur PDF an (siehe frontend-api.md), die Kamera liefert aber
- * ein Bild. PDF kann JPEG-Daten unverändert aufnehmen (Filter /DCTDecode) –
- * das Bild wird also nur verpackt, nicht neu komprimiert. Deshalb reicht ein
- * paar Zeilen eigener Code und es braucht keine PDF-Bibliothek.
+ * Das Backend nimmt nur PDF an, die Kamera liefert aber ein Bild. PDF kann
+ * JPEG-Daten unverändert aufnehmen (Filter /DCTDecode), das Bild wird also nur
+ * verpackt und nicht neu komprimiert. Deshalb reichen ein paar Zeilen eigener
+ * Code und es braucht keine PDF-Bibliothek.
  *
  * Der Beleg landet mittig auf einer A4-Seite, damit er sich wie die übrigen
  * Belege ansehen und ausdrucken lässt.
@@ -17,7 +17,7 @@ const enc = new TextEncoder();
 
 /**
  * Bildmaße aus den JPEG-Kopfdaten lesen.
- * Gesucht ist der SOF-Marker (Start of Frame); davor stehen beliebig viele
+ * Gesucht ist der SOF-Marker (Start of Frame). Davor stehen beliebig viele
  * andere Segmente, die jeweils ihre Länge mitbringen und übersprungen werden.
  */
 function jpegMasse(bytes) {
@@ -31,18 +31,18 @@ function jpegMasse(bytes) {
     if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { i += 2; continue; }
 
     const laenge = (bytes[i + 2] << 8) | bytes[i + 3];
-    // C0–CF sind SOF-Marker – bis auf C4 (Huffman), C8 (JPG) und CC (Arithmetik)
+    // C0 bis CF sind SOF-Marker, ausgenommen C4 (Huffman), C8 (JPG) und CC (Arithmetik)
     const istSof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
     if (istSof) {
       return { hoehe: (bytes[i + 5] << 8) | bytes[i + 6], breite: (bytes[i + 7] << 8) | bytes[i + 8] };
     }
-    if (laenge < 2) break; // unplausibel – lieber abbrechen als endlos laufen
+    if (laenge < 2) break; // unplausibel, lieber abbrechen als endlos laufen
     i += 2 + laenge;
   }
   return null;
 }
 
-/** JPEG-Bytes → fertiges PDF als Uint8Array */
+/** Verpackt JPEG-Bytes in ein fertiges PDF (Uint8Array) */
 export function jpegZuPdfBytes(jpeg) {
   const masse = jpegMasse(jpeg);
   if (!masse?.breite || !masse?.hoehe) throw new Error("JPEG konnte nicht gelesen werden.");
@@ -100,7 +100,7 @@ export function jpegZuPdfBytes(jpeg) {
   return pdf;
 }
 
-/** "data:image/jpeg;base64,…" → Uint8Array */
+/** Wandelt eine Data-URL ("data:image/jpeg;base64,…") in Bytes um */
 export function dataUrlZuBytes(dataUrl) {
   const roh   = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
   const bytes = new Uint8Array(roh.length);
@@ -108,13 +108,14 @@ export function dataUrlZuBytes(dataUrl) {
   return bytes;
 }
 
-/** JPEG-Data-URL der Kamera → PDF-Datei für den Upload */
+/** Macht aus der JPEG-Data-URL der Kamera eine PDF-Datei für den Upload */
 export function scanZuPdfDatei(dataUrl, dateiName) {
   return new File([jpegZuPdfBytes(dataUrlZuBytes(dataUrl))], dateiName, { type: "application/pdf" });
 }
 
 /**
- * Beliebiges Bild (PNG, JPG, WebP …) → PDF-Datei für den Upload.
+ * Macht aus einem beliebigen Bild (PNG, JPG, WebP und andere) eine PDF-Datei
+ * für den Upload.
  *
  * Das Bild wird über ein Canvas neu als JPEG gezeichnet. Das kostet etwas
  * Qualität, deckt dafür jedes Format ab, das der Browser öffnen kann, und
@@ -137,5 +138,5 @@ export async function bildZuPdfDatei(bild, dateiName) {
   return scanZuPdfDatei(canvas.toDataURL("image/jpeg", 0.92), dateiName);
 }
 
-/** "Beleg.png" → "Beleg.pdf" */
+/** Tauscht die Endung gegen .pdf, aus "Beleg.png" wird "Beleg.pdf" */
 export const alsPdfName = (name) => name.replace(/\.[^.]+$/, "") + ".pdf";

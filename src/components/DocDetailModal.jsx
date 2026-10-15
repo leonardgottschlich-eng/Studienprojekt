@@ -5,8 +5,8 @@ import { KATEGORIEN, kategorienVon, bereinigeKategorien } from '../data/kategori
 import { ladeBelegDatei, ladeBelegHerunter } from '../lib/belegDatei';
 import { oeffnePdf } from '../lib/pdfjs';
 
-/* Leeres Datengerüst für Belege ohne KI-Extraktion (hochgeladene/gescannte
-   Dateien vom Server) – gleiche Ansicht, nur ohne eingetragene Zahlen. */
+/* Leeres Datengerüst für Belege, die die KI noch nicht ausgelesen hat.
+   Die Ansicht bleibt dieselbe, nur ohne eingetragene Werte. */
 const LEERE_DATEN = {
   aussteller: "", adresse: "", ustIdNr: "", datum: "", rechnungsnr: "",
   zahlungsart: "", positionen: [],
@@ -48,12 +48,11 @@ function ConfidenceRing({ value }) {
 }
 
 /**
- * PDF-Seiten selbst zu Bildern zeichnen.
+ * Zeichnet die Seiten eines PDFs als Bilder.
  *
- * Der eingebaute PDF-Betrachter (vor allem der von Safari) zeigt die Seite in
- * seiner eigenen Zoomstufe und links oben ausgerichtet – der Beleg steht dann
- * angeschnitten und nicht mittig. Als Bild lässt sich die Seite dagegen exakt
- * auf die Breite legen und zentrieren, und zwar auf jedem Gerät gleich.
+ * Eingebaute PDF-Betrachter wählen Zoomstufe und Ausrichtung selbst, je nach
+ * Browser steht der Beleg dann angeschnitten oder am Rand. Als Bild lässt sich
+ * die Seite genau auf die Breite legen und zentrieren, auf jedem Gerät gleich.
  */
 const MAX_SEITEN = 5;
 
@@ -79,13 +78,13 @@ async function pdfZuBildern(blob) {
   return bilder;
 }
 
-/* ── Echte Dokumentvorschau (Backend-PDF oder Datei vom lokalen Server) ── */
+/* Vorschau der hinterlegten Datei, aus dem Backend oder vom lokalen Server */
 function ServerFilePreview({ doc, mandant, isMobile }) {
   const [fileUrl, setFileUrl] = useState(null);
-  const [seiten, setSeiten]   = useState(null);   // gerenderte PDF-Seiten
+  const [seiten, setSeiten]   = useState(null);   // gezeichnete PDF-Seiten
   const [error, setError]     = useState(false);
-  // Grund, falls das Zeichnen scheitert – wird unter der Rückfallansicht
-  // angezeigt, damit man nicht raten muss, woran es liegt
+  // Grund, falls das Zeichnen scheitert. Er steht unter der Ersatzansicht,
+  // damit man nicht raten muss, woran es liegt.
   const [zeichenFehler, setZeichenFehler] = useState(null);
 
   useEffect(() => {
@@ -94,8 +93,8 @@ function ServerFilePreview({ doc, mandant, isMobile }) {
 
     const load = async () => {
       try {
-        // Nur die Felder, von denen die Datei abhängt – das Beleg-Objekt selbst
-        // wird beim regelmäßigen Neuladen ersetzt und soll keinen Neuaufbau auslösen
+        // Nur die Felder, von denen die Datei abhängt. Das Beleg-Objekt selbst
+        // wird beim regelmäßigen Neuladen ersetzt und soll keinen Neuaufbau auslösen.
         const blob = await ladeBelegDatei(
             { backendDoc: doc.backendDoc, apiId: doc.apiId, name: doc.name },
             { nr: mandant.nr, name: mandant.name },
@@ -146,12 +145,12 @@ function ServerFilePreview({ doc, mandant, isMobile }) {
   };
 
   if (doc.type === "pdf") {
-    // Gezeichnete Seiten – volle Breite, mittig, nichts abgeschnitten
+    // Gezeichnete Seiten in voller Breite und mittig
     if (seiten) {
       return (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {seiten.map((bild, i) => (
-                <img key={i} src={bild} alt={`${doc.name} – Seite ${i + 1}`} style={bildStil} />
+                <img key={i} src={bild} alt={`${doc.name}, Seite ${i + 1}`} style={bildStil} />
             ))}
           </div>
       );
@@ -162,14 +161,14 @@ function ServerFilePreview({ doc, mandant, isMobile }) {
       return <div style={{ padding: 40, textAlign: "center", color: "#9ca3af", fontSize: 13, animation: "pulse 1.2s infinite" }}>Beleg wird aufbereitet…</div>;
     }
 
-    // Rückfallebene: die Direktanzeige des Browsers. Sie richtet die Seite
-    // nach eigenem Gutdünken aus – deshalb steht darunter, woran es lag.
+    // Ersatzweise die Direktanzeige des Browsers. Sie richtet die Seite nach
+    // eigenen Regeln aus, deshalb steht darunter, woran das Zeichnen scheiterte.
     return (
         <>
           <iframe src={`${fileUrl}#view=FitH&pagemode=none`} title={doc.name}
                   style={{ display: "block", width: "100%", height: isMobile ? "65vh" : "100%", minHeight: isMobile ? 380 : 500, border: "none", borderRadius: 4, background: "#fff", boxShadow: "0 2px 12px rgba(0,0,0,.08)" }} />
           <p style={{ fontSize: 10.5, color: "#b45309", marginTop: 8, lineHeight: 1.45 }}>
-            Direktanzeige des Browsers – die Seite ließ sich nicht zeichnen ({zeichenFehler}).
+            Direktanzeige des Browsers, weil sich die Seite nicht zeichnen ließ ({zeichenFehler}).
           </p>
         </>
     );
@@ -178,102 +177,7 @@ function ServerFilePreview({ doc, mandant, isMobile }) {
   return <img src={fileUrl} alt={doc.name} style={bildStil} />;
 }
 
-/* ── Scan Preview ── */
-function ScanPreview({ doc }) {
-  if (doc.scanPreview === "totalenergies") {
-    return (
-        <div style={{ background: "#fff", borderRadius: 4, padding: "28px 24px", fontFamily: "'Courier New', monospace", fontSize: 11.5, lineHeight: 1.7, color: "#1a1a1a", boxShadow: "0 2px 12px rgba(0,0,0,.08)", minHeight: "100%", filter: "contrast(1.05)", position: "relative" }}>
-          <div style={{ position: "absolute", top: 10, left: 10, width: 30, height: 3, background: "#888", borderRadius: 2, transform: "rotate(-10deg)" }} />
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontWeight: 700 }}>TotalEnergies Mertert</div>
-            <div>48, Route de Wasserbillig</div>
-            <div>L-6686 Mertert</div>
-            <div>Tel: 00352-748478</div>
-            <div style={{ fontSize: 10, color: "#555" }}>Öffnung: Montag bis Sonntag 6h00–22h00</div>
-            <div>MwSt-Nr: LU18678765</div>
-          </div>
-          <div style={{ textAlign: "center", fontWeight: 800, fontSize: 13, letterSpacing: 1, marginBottom: 4 }}>KUNDENBELEG</div>
-          <div style={{ textAlign: "center", marginBottom: 12, fontSize: 10 }}>Genehmigt</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: "0 8px", borderTop: "1px solid #ccc", paddingTop: 6, marginBottom: 6 }}>
-            <span style={{ fontSize: 10, fontWeight: 700 }}>ARTIKEL</span><span style={{ fontSize: 10, fontWeight: 700 }}>MWST</span><span style={{ fontSize: 10, fontWeight: 700 }}>BETRAG</span>
-            <span>*Eurosuper</span><span>4</span><span>€ 70,73</span>
-            <span style={{ fontSize: 9, color: "#555", gridColumn: "1/4" }}>(ZP 5; 39,45 l × € 1,793/l)</span>
-            <span>MONSTER JUICE VIK. B</span><span>1</span><span>€ 1,99</span>
-          </div>
-          <div style={{ borderTop: "1px dashed #aaa", marginBottom: 6 }} />
-          <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 13, marginBottom: 10 }}>
-            <span>SUMME</span><span>€ 72,72</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-            <span>Mastercard</span><span>€ 72,72</span>
-          </div>
-          <div style={{ fontSize: 9.5, color: "#444", borderTop: "1px solid #ccc", paddingTop: 8, marginBottom: 8 }}>
-            <div>MASTERCARD: 537428******2640 OT</div>
-            <div>PAN Folgenummer: 00</div>
-            <div>Rest.: Kontaktlos bearbeitet</div>
-            <div>Autorisierung: On-line</div>
-            <div>PIN geprüft</div>
-            <div>STAN: 147965 | Autor.-code: 134908</div>
-            <div>Händler ID: ***77187</div>
-            <div>VERKAUF – Genehmigt</div>
-          </div>
-          <div style={{ borderTop: "1px solid #ccc", paddingTop: 8, marginBottom: 8 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>MASTERCARD</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", fontSize: 9.5, gap: 2 }}>
-              <span style={{ fontWeight: 600 }}>MwSt.</span><span style={{ fontWeight: 600 }}>Art %</span><span style={{ fontWeight: 600 }}>Netto</span><span style={{ fontWeight: 600 }}>Betrag</span>
-              <span>4</span><span>17,00</span><span>€ 60,45</span><span>€ 10,28</span>
-              <span>1</span><span>3,00</span><span>€ 1,93</span><span>€ 0,06</span>
-            </div>
-          </div>
-          <div style={{ fontSize: 9.5, color: "#555", borderTop: "1px solid #ccc", paddingTop: 8 }}>
-            <div>01-05-2026 13:49:21 – T4 0943120093</div>
-            <div>12-342944-65469427 / 1882</div>
-          </div>
-          <div style={{ marginTop: 14, fontSize: 9, color: "#777", borderTop: "1px dashed #ccc", paddingTop: 8, textAlign: "center" }}>
-            <div>Keine Rückerstattung</div>
-            <div>Umtausch innerhalb von 15 Tagen</div>
-            <div style={{ marginTop: 6 }}>Dieser Beleg gilt als Rechnung</div>
-            <div>Merci et bonne route </div>
-          </div>
-        </div>
-    );
-  }
-
-  // Generische Scan-Vorschau für alle anderen Belege
-  const lines = [
-    { w: "60%", bold: true }, { w: "40%" }, { w: "50%" }, { w: "30%" }, { w: "0%", h: 10 },
-    { w: "55%", bold: true, center: true }, { w: "0%", h: 8 },
-    { w: "100%", thin: true }, { w: "90%" }, { w: "75%" }, { w: "85%" }, { w: "70%" },
-    { w: "100%", thin: true }, { w: "0%", h: 8 },
-    { w: "50%", bold: true }, { w: "0%", h: 12 },
-    { w: "95%" }, { w: "80%" }, { w: "88%" }, { w: "72%" }, { w: "0%", h: 8 },
-    { w: "100%", thin: true },
-    { w: "40%", bold: true }, { w: "55%" }, { w: "45%" },
-    { w: "0%", h: 10 }, { w: "60%", thin: true }, { w: "35%", bold: true, right: true },
-    { w: "0%", h: 16 }, { w: "70%", thin: true },
-    { w: "55%" }, { w: "48%" }, { w: "62%" },
-  ];
-  return (
-      <div style={{ background: "#fff", borderRadius: 4, padding: "28px 24px", boxShadow: "0 2px 12px rgba(0,0,0,.08)", minHeight: "100%", position: "relative" }}>
-        <div style={{ position: "absolute", top: 10, left: 10, width: 26, height: 3, background: "#aaa", borderRadius: 2, transform: "rotate(-8deg)" }} />
-        {lines.map((l, i) => l.w === "0%" ? (
-            <div key={i} style={{ height: l.h }} />
-        ) : (
-            <div key={i} style={{
-              height: l.bold ? 9 : l.thin ? 1 : 7, width: l.w,
-              background: l.thin ? "#ddd" : l.bold ? "#2a2a2a" : "#888",
-              borderRadius: 3, marginBottom: l.bold ? 7 : 5,
-              marginLeft: l.right ? "auto" : l.center ? "auto" : 0,
-              marginRight: l.right ? 0 : l.center ? "auto" : 0,
-              opacity: l.thin ? 1 : undefined,
-            }} />
-        ))}
-      </div>
-  );
-}
-
-
-/* ── Einzelnes Datenfeld (editierbar) ──────────────────────────── */
+/* Einzelnes Datenfeld, im Bearbeitungsmodus als Eingabefeld */
 function FieldRow({ label, fieldKey, wide, editMode, edited, setEdited, ed }) {
   const fieldStyle = {
     width: "100%", padding: "7px 10px", border: "1px solid #e5e7eb",
@@ -287,7 +191,7 @@ function FieldRow({ label, fieldKey, wide, editMode, edited, setEdited, ed }) {
         {editMode ? (
             <input style={fieldStyle} value={edited[fieldKey] ?? ""} onChange={e => setEdited(p => ({ ...p, [fieldKey]: e.target.value }))} />
         ) : (
-            <div style={{ fontSize: 12.5, color: "#111827", fontWeight: 500, padding: "6px 0", borderBottom: "1px solid #f3f4f6" }}>{ed[fieldKey] || "—"}</div>
+            <div style={{ fontSize: 12.5, color: "#111827", fontWeight: 500, padding: "6px 0", borderBottom: "1px solid #f3f4f6" }}>{ed[fieldKey] || "-"}</div>
         )}
       </div>
   );
@@ -339,7 +243,7 @@ function berechneAnrechnung(positionen, included) {
   };
 }
 
-// "Tankbeleg.pdf" → ["Tankbeleg", ".pdf"]
+// Trennt den Dateinamen von der Endung: "Tankbeleg.pdf" wird zu ["Tankbeleg", ".pdf"]
 const teileName = (name) => {
   const i = name.lastIndexOf(".");
   return i > 0 ? [name.slice(0, i), name.slice(i)] : [name, ""];
@@ -349,7 +253,7 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
   const [editMode, setEditMode] = useState(!!startImBearbeiten);
   const [laedtDownload, setLaedtDownload] = useState(false);
 
-  // Demo-Belege aus den Mock-Daten haben keine hinterlegte Datei
+  // Nur Belege mit hinterlegter Datei lassen sich anzeigen und herunterladen
   const hatDatei = !!(doc.backendDoc || (doc.serverFile && mandant));
 
   // Über diesen Beleg ist die KI noch nicht gelaufen
@@ -364,7 +268,7 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
     }
     setLaedtDownload(false);
   };
-  // Dateiname ohne Endung – die Endung bleibt beim Umbenennen unverändert
+  // Dateiname ohne Endung, die Endung bleibt beim Umbenennen unverändert
   const [nameEntwurf, setNameEntwurf] = useState(() => teileName(doc.name)[0]);
   const [edited, setEdited] = useState({ ...LEERE_DATEN, ...doc.extractedData });
   const [included, setIncluded] = useState(
@@ -395,8 +299,8 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
     setIncluded(prev => [...prev, true]);
   };
 
-  // Fehlende Zahlen einer Position ergänzen (bei manuell angelegten Zeilen):
-  // aus Netto + Satz folgen MwSt und Brutto, aus Brutto + Satz folgt Netto.
+  // Ergänzt fehlende Zahlen einer von Hand angelegten Position. Aus Netto und
+  // Steuersatz folgen MwSt und Brutto, aus Brutto und Steuersatz folgt Netto.
   const ergaenzePosition = (p) => {
     const satz = Number(p.mwstSatz) || 0;
     let netto  = parseBetrag(p.netto);
@@ -413,9 +317,9 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
     };
   };
 
-  // Beim Speichern: Checkbox-Flags übernehmen und alle Summen aus den
-  // (ggf. bearbeiteten) Positionen neu berechnen. gesamtBetrag = Beleg gesamt,
-  // angerechnetBetrag = Brutto nur der angehakten Positionen.
+  // Beim Speichern werden die Haken übernommen und alle Summen aus den
+  // Positionen neu berechnet. gesamtBetrag ist der ganze Beleg,
+  // angerechnetBetrag das Brutto der angehakten Positionen.
   const withFlags = (data) => {
     const pos = (data.positionen ?? []).map(ergaenzePosition);
     const alle = berechneAnrechnung(pos, pos.map(() => true));
@@ -430,7 +334,7 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
     };
   };
 
-  // Speichern: erst der Name (falls geändert), dann die Belegdaten – so bleibt
+  // Erst wird ein geänderter Name gespeichert, dann die Belegdaten. So bleibt
   // der neue Name erhalten, wenn das Bestätigen die Liste aktualisiert.
   const speichereAlles = async () => {
     const neu = nameEntwurf.trim();
@@ -452,16 +356,16 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
   return (
       <div style={{ position: "fixed", inset: 0, zIndex: 500, display: "flex", alignItems: "stretch" }}
            onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-        {/* Backdrop */}
+        {/* Abgedunkelter Hintergrund */}
         <div style={{ position: "absolute", inset: 0, background: "rgba(11,46,68,.55)", backdropFilter: "blur(4px)" }} onClick={onClose} />
 
-        {/* Modal panel – am Telefon bildschirmfüllend, sonst als Karte mittig */}
+        {/* Am Telefon bildschirmfüllend, sonst als Karte in der Mitte */}
         <div style={isMobile
             ? { position: "relative", margin: 0, width: "100vw", height: "100dvh", maxHeight: "100dvh", background: "#fff", display: "flex", flexDirection: "column", overflow: "hidden" }
             : { position: "relative", margin: "auto", width: "min(92vw, 1080px)", maxHeight: "92vh", background: "#fff", borderRadius: 16, boxShadow: "0 24px 80px rgba(0,0,0,.22)", display: "flex", flexDirection: "column", animation: "fadeUp .25s ease", overflow: "hidden" }}>
 
-          {/* Header – der Dateiname wird gekürzt, damit das Kreuz zum Schließen
-              bei jeder Namenslänge sichtbar bleibt */}
+          {/* Kopfzeile. Der Dateiname wird gekürzt, damit das Kreuz zum Schließen
+              bei jeder Namenslänge sichtbar bleibt. */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: isMobile ? "12px 16px" : "16px 24px", borderBottom: "1px solid #f0ece4", flexShrink: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flex: 1 }}>
               <FileIcon type={doc.type} />
@@ -485,8 +389,7 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
               </div>
               {!isMobile && <StatusBadge status={doc.status} />}
             </div>
-            {/* Herunterladen – nur bei Belegen, zu denen es wirklich eine
-                Datei gibt (Demo-Belege haben keine) */}
+            {/* Herunterladen gibt es nur, wenn eine Datei hinterlegt ist */}
             {hatDatei && (
                 <button onClick={herunterladen} disabled={laedtDownload}
                         title={`${doc.name} herunterladen`}
@@ -499,22 +402,26 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
             </button>
           </div>
 
-          {/* Body – am Telefon untereinander: erst der Beleg, dann die Daten.
-              Gescrollt wird dann der ganze Bereich statt jeder Spalte einzeln. */}
+          {/* Am Telefon steht erst der Beleg und darunter die Daten. Gescrollt
+              wird dann der ganze Bereich statt jeder Spalte einzeln. */}
           <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", flex: 1, overflowY: isMobile ? "auto" : "hidden", overflowX: "hidden", minHeight: 0 }}>
 
-            {/* Originaldokument.
-                Am Telefon ein breiter Rand ringsum: Das PDF nimmt Wischgesten
-                selbst entgegen, nur daneben lässt sich die Ansicht scrollen. */}
+            {/* Originaldokument. Am Telefon mit breitem Rand ringsum, damit
+                man daneben bequem scrollen kann. */}
             <div style={{ width: isMobile ? "100%" : "42%", flexShrink: 0, background: "#f5f3ef", borderRight: isMobile ? "none" : "1px solid #ede9e0", borderBottom: isMobile ? "1px solid #ede9e0" : "none", overflowY: isMobile ? "visible" : "auto", padding: isMobile ? "16px 34px 28px" : 20 }}>
               <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", letterSpacing: ".08em", marginBottom: 12 }}>ORIGINALDOKUMENT</div>
-              {hatDatei ? <ServerFilePreview doc={doc} mandant={mandant} isMobile={isMobile} /> : <ScanPreview doc={doc} />}
+              {hatDatei ? <ServerFilePreview doc={doc} mandant={mandant} isMobile={isMobile} /> : (
+                  <div style={{ padding: 40, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
+                    <i className="bi bi-file-earmark" style={{ fontSize: 34, display: "block", marginBottom: 8 }} />
+                    Zu diesem Beleg ist keine Datei hinterlegt.
+                  </div>
+              )}
             </div>
 
             {/* Belegdaten */}
             <div style={{ flex: 1, minWidth: 0, overflowY: isMobile ? "visible" : "auto", padding: isMobile ? 16 : "20px 24px", display: "flex", flexDirection: "column", gap: 0 }}>
 
-              {/* Confidence + header */}
+              {/* Überschrift und KI-Konfidenz */}
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
                 <div>
                   <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", letterSpacing: ".08em", marginBottom: 6 }}>{doc.confidence != null ? "KI-EXTRAHIERTE DATEN" : "BELEGDATEN"}</div>
@@ -527,8 +434,8 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
                 {doc.confidence != null && <ConfidenceRing value={doc.confidence} />}
               </div>
 
-              {/* Fields grid – am Telefon einspaltig, sonst wird der rechte
-                  Wert abgeschnitten */}
+              {/* Datenfelder. Am Telefon einspaltig, sonst wird der rechte
+                  Wert abgeschnitten. */}
               <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? "12px" : "14px 20px", marginBottom: 20 }}>
                 <FieldRow label="Aussteller" fieldKey="aussteller" wide editMode={editMode} edited={edited} setEdited={setEdited} ed={ed} />
                 <FieldRow label="Adresse" fieldKey="adresse" wide editMode={editMode} edited={edited} setEdited={setEdited} ed={ed} />
@@ -539,7 +446,7 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
                 <FieldRow label="Zahlungsart" fieldKey="zahlungsart" editMode={editMode} edited={edited} setEdited={setEdited} ed={ed} />
               </div>
 
-              {/* Klassifikation – ein Beleg kann mehreren Kategorien zugeordnet sein */}
+              {/* Klassifikation, ein Beleg kann mehreren Kategorien zugeordnet sein */}
               <div style={{ marginBottom: 20 }}>
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                   <span style={labelStyle}>KLASSIFIKATION</span>
@@ -603,7 +510,7 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
                 </div>
                 <div style={{ background: "#fafaf8", borderRadius: 8, border: "1px solid #f0ece4", overflow: "hidden" }}>
                   <div style={{ display: "grid", gridTemplateColumns: "26px 2.2fr 1fr 46px 1fr", gap: 8, padding: "7px 12px", background: "#f5f3ef", borderBottom: "1px solid #ede9e0" }}>
-                    <span style={{ fontSize: 9.5, fontWeight: 700, color: "#9ca3af" }} title="Steuerlich anrechnen">✓</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#9ca3af" }} title="Steuerlich anrechnen"><i className="bi bi-check2" /></span>
                     {["Bezeichnung", "Netto", "MwSt", "Brutto"].map((h, hi) => (
                         <span key={h} style={{ fontSize: 9.5, fontWeight: 700, color: "#9ca3af", letterSpacing: ".05em", textAlign: hi > 0 ? "right" : "left" }}>{h.toUpperCase()}</span>
                     ))}
@@ -668,7 +575,7 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
                 </div>
               </div>
 
-              {/* Steuerliche Auswertung — live aus den angehakten Positionen */}
+              {/* Steuerliche Auswertung, laufend aus den angehakten Positionen berechnet */}
               <div style={{ background: "#f5f3ef", borderRadius: 8, padding: "14px 16px", marginBottom: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                   <span style={{ ...labelStyle, marginBottom: 0 }}>STEUERLICHE AUSWERTUNG</span>
@@ -719,7 +626,7 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
 
                 {/* Abgleich mit dem Beleg */}
                 <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #e0dbd2", display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#9ca3af" }}>
-                  <span>Beleg gesamt: <strong style={{ color: "#6b7280" }}>{ed.gesamtBetrag || "—"}</strong></span>
+                  <span>Beleg gesamt: <strong style={{ color: "#6b7280" }}>{ed.gesamtBetrag || "-"}</strong></span>
                   {calc.ausgenommenBrutto > 0 && (
                       <span>davon ausgenommen: <strong style={{ color: "#b45309" }}>{formatBetrag(calc.ausgenommenBrutto)}</strong></span>
                   )}
@@ -728,12 +635,12 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
             </div>
           </div>
 
-          {/* Footer: Action buttons – am Telefon ohne Hinweistext, dafür
-              füllen die Schaltflächen die Breite */}
+          {/* Fußzeile mit den Aktionen. Am Telefon ohne Hinweistext, dafür
+              füllen die Schaltflächen die Breite. */}
           <div style={{ flexShrink: 0, padding: isMobile ? "12px 16px" : "14px 24px", borderTop: "1px solid #f0ece4", background: "#fafaf8", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
             {!isMobile && (
                 <div style={{ fontSize: 11, color: "#9ca3af" }}>
-                  {editMode ? "✏️ Bearbeitungsmodus aktiv — Felder können geändert werden" : "Klicke auf einen Eintrag um Details anzuzeigen"}
+                  {editMode ? "Bearbeitungsmodus aktiv, alle Felder können geändert werden" : "Über Bearbeiten lassen sich die Belegdaten ändern"}
                 </div>
             )}
             <div style={{ display: "flex", gap: 10, width: isMobile ? "100%" : "auto" }}>
@@ -760,13 +667,13 @@ export default function DocDetailModal({ doc, mandant, isMobile, startImBearbeit
                   </button>
               )}
 
-              {/* Bestätigen – solange die KI nicht gelaufen ist, wird hier nur
-                  gespeichert, der Beleg bleibt ausstehend. Der Knopf heißt
-                  dann auch so, statt etwas anderes zu versprechen. */}
+              {/* Bestätigen. Solange die KI nicht über den Beleg gelaufen ist,
+                  wird nur gespeichert und der Beleg bleibt ausstehend. Der Knopf
+                  heißt dann auch Speichern. */}
               {!editMode && (
                   <button onClick={() => onConfirm(withFlags(ed), kategorien)}
                           title={nochNichtAnalysiert
-                              ? "Eingaben speichern – geprüft wird der Beleg erst nach der KI-Analyse"
+                              ? "Eingaben speichern. Geprüft wird der Beleg erst nach der KI-Analyse."
                               : "Beleg als geprüft bestätigen"}
                           style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: isMobile ? 1 : undefined, gap: 6, padding: "9px 20px", background: nochNichtAnalysiert ? "#18537a" : "linear-gradient(135deg,#16a34a,#22c55e)", border: "none", borderRadius: 9, fontSize: 13, fontWeight: 700, color: "#fff", cursor: "pointer", boxShadow: nochNichtAnalysiert ? "none" : "0 2px 8px rgba(22,163,74,.3)" }}>
                     <i className={nochNichtAnalysiert ? "bi bi-floppy" : "bi bi-check2-circle"} /> {nochNichtAnalysiert ? "Speichern" : "Bestätigen"}

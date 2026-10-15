@@ -23,10 +23,10 @@ export function ladeEinstellungen() {
 export function speichereEinstellungen(einstellungen) {
   try {
     localStorage.setItem(SCHLUESSEL, JSON.stringify(einstellungen));
-  } catch { /* z. B. privater Modus – Einstellungen gelten dann nur für diese Sitzung */ }
+  } catch { /* etwa im privaten Modus, dann gelten die Einstellungen nur für diese Sitzung */ }
 }
 
-/* Zuletzt geöffnete Seite – im sessionStorage, also pro Browser-Tab.
+/* Zuletzt geöffnete Seite. Sie liegt im sessionStorage, also pro Browser-Tab.
    Dadurch bleibt ein Neuladen auf derselben Seite, während ein zweiter Tab
    unabhängig davon woanders stehen kann. Beim Abmelden wird sie verworfen. */
 const SEITE = "bs_seite";
@@ -39,7 +39,7 @@ export const merkeSeite = (seite) => {
 };
 
 /* Belege, die über Google Drive hereingekommen sind.
-   Für die Vorführung gelten genau diese als der vorbereitete Beleg – die
+   Für die Vorführung gelten genau diese als der vorbereitete Beleg. Die
    simulierte KI erkennt sie und sonst nichts (siehe lib/kiAnalyse.js).
    Im localStorage, damit ein Neuladen zwischen Zuordnen und Analyse nichts
    verliert. */
@@ -54,7 +54,7 @@ export const merkeKiBeleg = (id) => {
   try {
     const liste = [...new Set([...ladeKiBelege(), id])].slice(-MERKE_MAX);
     localStorage.setItem(KI_BELEGE, JSON.stringify(liste));
-  } catch { /* privater Modus – dann gilt der Beleg eben als nicht vorbereitet */ }
+  } catch { /* im privaten Modus gilt der Beleg dann als nicht vorbereitet */ }
 };
 
 /* Zuletzt gewählter Mandant */
@@ -66,6 +66,5 @@ export const merkeMandanten = (id) => {
   try { localStorage.setItem("bs_letzter_mandant", String(id)); } catch { /* ignorieren */ }
 };
 
-/** Rollen aus den Backend-Gruppen ableiten */
-export const istAdmin       = (user) => !!user?.groups?.includes("admin");
-export const istSteuerberater = (user) => !!user?.groups?.includes("tax_advisor");
+/** Rolle aus den Backend-Gruppen ableiten */
+export const istAdmin = (user) => !!user?.groups?.includes("admin");

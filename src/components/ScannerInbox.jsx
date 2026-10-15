@@ -2,22 +2,22 @@ import { useState } from "react";
 import FileIcon from "./FileIcon";
 import { lokalFetch } from "../localServer";
 
-// "Scan_123.pdf" → ["Scan_123", ".pdf"]
+// Trennt den Dateinamen von der Endung: "Scan_123.pdf" wird zu ["Scan_123", ".pdf"]
 const splitName = (name) => {
     const i = name.lastIndexOf(".");
     return i > 0 ? [name.slice(0, i), name.slice(i)] : [name, ""];
 };
 
-// Date → "14:02:11"
+// Uhrzeit im Format "14:02:11"
 const uhrzeit = (d) => d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 /**
  * Scanner-Eingang: Hier landen alle Scans vom Belegscanner. Der Beleg wird
  * erst einsortiert, wenn er benannt und einem Mandanten zugeordnet wurde.
- * Erkennt der Server einen Mandanten im PDF-Text, ist er vorausgewählt.
+ * Bringt der Server einen Vorschlag mit, ist dieser Mandant vorausgewählt.
  *
- * Der Bereich steht immer da, auch leer – so sieht man, dass er abgefragt
- * wird, und kann ihn ohne Neuladen der Seite sofort auffrischen.
+ * Der Bereich ist immer sichtbar, auch wenn er leer ist. So sieht man, dass
+ * er abgefragt wird, und kann ihn ohne Neuladen der Seite auffrischen.
  */
 export default function ScannerInbox({ files, mandanten, onAssign, onVerwerfen, stand, onAktualisieren }) {
     const [selection, setSelection] = useState({}); // fileName → mandantNr
@@ -48,7 +48,7 @@ export default function ScannerInbox({ files, mandanten, onAssign, onVerwerfen, 
         } catch { /* Vorschau optional */ }
     };
 
-    // gewählter Mandant – Fallback auf den Server-Vorschlag
+    // Gewählter Mandant, ersatzweise der Vorschlag des Servers
     const selectedNr = (f) => selection[schluessel(f)] ?? f.vorschlag?.nr ?? "";
 
     const assign = async (f) => {
@@ -102,15 +102,15 @@ export default function ScannerInbox({ files, mandanten, onAssign, onVerwerfen, 
             </div>
             <style>{`@keyframes drehen { to { transform: rotate(360deg); } }`}</style>
 
-            {/* Eine Quelle antwortet nicht – sonst sähe das aus wie "nichts Neues" */}
+            {/* Hinweis, wenn eine Quelle nicht antwortet. Sonst sähe das aus wie "nichts Neues". */}
             {(stand?.driveFehler || stand?.lokalFehler) && (
                 <div style={{ padding: "8px 20px", background: "#fef2f2", borderBottom: "1px solid #fecaca", fontSize: 11.5, color: "#b91c1c", display: "flex", alignItems: "center", gap: 6 }}>
                     <i className="bi bi-exclamation-triangle-fill" />
                     {stand.driveFehler && stand.lokalFehler
-                        ? "Weder Google Drive noch der Scan-Server antworten – neue Scans werden gerade nicht angezeigt."
+                        ? "Weder Google Drive noch der Scan-Server antworten, neue Scans werden gerade nicht angezeigt."
                         : stand.driveFehler
-                            ? "Google Drive antwortet gerade nicht – Scans von dort fehlen in der Liste."
-                            : "Der Scan-Server antwortet nicht – lokale Scans fehlen in der Liste."}
+                            ? "Google Drive antwortet gerade nicht, Scans von dort fehlen in der Liste."
+                            : "Der Scan-Server antwortet nicht, lokale Scans fehlen in der Liste."}
                 </div>
             )}
 
@@ -121,7 +121,7 @@ export default function ScannerInbox({ files, mandanten, onAssign, onVerwerfen, 
                 </div>
             ) : (
                 <div style={{ padding: "8px 20px", fontSize: 11.5, color: "#92400e", borderBottom: "1px solid #fef3c7" }}>
-                    Beleg benennen und Mandanten zuordnen – erst dann wird er einsortiert.
+                    Beleg benennen und Mandanten zuordnen, erst dann wird er einsortiert.
                 </div>
             )}
 
@@ -141,7 +141,7 @@ export default function ScannerInbox({ files, mandanten, onAssign, onVerwerfen, 
                                 <span style={{ fontSize: 11.5, color: "#9ca3af" }}>{ext}</span>
                             </div>
                             <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 3, display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
-                                {/* Herkunft, damit klar ist wo der Scan liegt */}
+                                {/* Herkunft, damit klar ist, wo der Scan liegt */}
                                 <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: f.quelle === "drive" ? "#1d4ed8" : "#6b7280" }}>
                                     <i className={`bi ${f.quelle === "drive" ? "bi-cloud" : "bi-hdd"}`} />
                                     {f.quelle === "drive" ? "Drive" : "Lokal"}
@@ -155,7 +155,7 @@ export default function ScannerInbox({ files, mandanten, onAssign, onVerwerfen, 
                             <i className="bi bi-eye" />
                         </button>
                         {/* Auswahl, Speichern und Löschen bleiben als Gruppe
-                            zusammen – bricht die Zeile um, dann nur als Ganzes */}
+                            zusammen und brechen nur gemeinsam um */}
                         <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "1 1 260px", minWidth: 0 }}>
                             <select value={selectedNr(f)}
                                     onChange={(e) => setSelection((prev) => ({ ...prev, [k]: e.target.value }))}

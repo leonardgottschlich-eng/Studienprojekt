@@ -6,10 +6,10 @@ export function useUpload(currentMandant, setAllDocs, showNotification) {
   const [uploading, setUploading]           = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  // Datei → Backend (MySQL): legt ein Dokument mit Platzhalter-Rechnungsdaten an,
-  // die echten Werte werden später im Detail-Modal eingetragen und gePATCHt.
-  // Das Backend nimmt nur PDF – ein Bild wird deshalb wie ein Handy-Scan in
-  // ein PDF verpackt, damit es im Beleg-Dialog angezeigt werden kann.
+  // Legt die Datei im Backend als Dokument mit Platzhalter-Rechnungsdaten an.
+  // Die echten Werte werden später in der Detailansicht eingetragen und per
+  // PATCH gespeichert. Das Backend nimmt nur PDF, ein Bild wird deshalb wie
+  // ein Handy-Scan in ein PDF verpackt.
   const uploadToBackend = async (file) => {
     const istPdf = file.type === "application/pdf";
     const pdf = istPdf ? file : await bildZuPdfDatei(file, alsPdfName(file.name));
@@ -43,7 +43,7 @@ export function useUpload(currentMandant, setAllDocs, showNotification) {
         uploadedDocs.push(await uploadToBackend(file));
       } catch (e) {
         if (e.status === 401) {
-          showNotification("Sitzung abgelaufen – bitte neu anmelden.", "error");
+          showNotification("Sitzung abgelaufen, bitte neu anmelden.", "error");
           sessionStorage.clear();
           window.location.reload();
           return;
@@ -61,7 +61,7 @@ export function useUpload(currentMandant, setAllDocs, showNotification) {
         ...prev,
         [currentMandant.id]: [...uploadedDocs, ...(prev[currentMandant.id] || [])],
       }));
-      showNotification(`${uploadedDocs.length} Beleg${uploadedDocs.length > 1 ? "e" : ""} gespeichert ✓`);
+      showNotification(`${uploadedDocs.length} Beleg${uploadedDocs.length > 1 ? "e" : ""} gespeichert`);
     }
   };
 

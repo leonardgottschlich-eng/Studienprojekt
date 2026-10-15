@@ -21,14 +21,14 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
         <aside className={`sidebar${sidebarOpen ? " open" : ""}`}
                style={{ width: 240, background: "#0b2e44", display: "flex", flexDirection: "column", paddingTop: "calc(24px + env(safe-area-inset-top))", paddingBottom: "env(safe-area-inset-bottom)", position: "fixed", top: 0, left: 0, height: "100vh", zIndex: 200, transition: "transform .25s ease", boxSizing: "border-box" }}>
 
-            {/* Logo – führt zur Startseite */}
+            {/* Logo, führt zur Startseite */}
             <button onClick={() => { onNavigate?.("dashboard"); onClose(); }} title="Zur Startseite"
                     style={{ background: "none", border: "none", cursor: "pointer", padding: "0 16px 20px", textAlign: "left", alignSelf: "flex-start" }}>
                 <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 17, fontWeight: 900, color: "#f0f8ff" }}>Bill</span>
                 <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 17, fontWeight: 400, color: "transparent", WebkitTextStroke: "1.2px #fd8f19" }}>Squid</span>
             </button>
 
-            {/* Mandant Switcher – nur für Kanzlei-Rollen, Mandanten sehen nur
+            {/* Mandantenwechsel, nur für Kanzlei-Rollen. Mandanten sehen nur
                 sich selbst. Auch ohne zugewiesenen Mandanten sichtbar, damit
                 der Knopf zum Anlegen erreichbar bleibt. */}
             {zeigeMandantenwechsel && (
@@ -79,8 +79,8 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
                             ))}
                         </div>
 
-                        {/* Neuen Mandanten anlegen – unter der Liste, damit der
-                            Weg vom Wechseln zum Anlegen kurz ist */}
+                        {/* Neuen Mandanten anlegen. Der Knopf steht unter der
+                            Liste, damit der Weg vom Wechseln zum Anlegen kurz ist. */}
                         {onMandantAnlegen && (
                             <button onClick={() => { setDropdownOpen(false); setSearch(""); onMandantAnlegen(); }}
                                     style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 12px", borderTop: "1px solid #f0ece4", background: "#fafaf8", border: "none", borderLeft: "none", borderRight: "none", borderBottom: "none", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}>
@@ -97,7 +97,7 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
 
             <div style={{ height: 1, background: "rgba(255,255,255,.06)", margin: "0 12px 16px" }} />
 
-            {/* Nav */}
+            {/* Navigation */}
             <nav style={{ flex: 1, padding: "0 10px" }}>
                 {[
                     { icon: "bi-border-all", label: "Dashboard",     seite: "dashboard" },
@@ -115,7 +115,7 @@ export default function Sidebar({ currentMandant, mandanten, sidebarOpen, onSele
                 })}
             </nav>
 
-            {/* User */}
+            {/* Angemeldeter Benutzer */}
             <div style={{ padding: "12px 20px", borderTop: "1px solid rgba(255,255,255,.06)", display: "flex", alignItems: "center", gap: 9 }}>
                 <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#18537a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fd8f19", flexShrink: 0 }}>
                     {(user?.name || "??").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}

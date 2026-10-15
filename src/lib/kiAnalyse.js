@@ -6,17 +6,17 @@
  * data/kiDemoBelege.js.
  *
  * Als vorbereitet gilt für die Vorführung jeder Beleg, der über Google Drive
- * hereingekommen ist – die Drive-Strecke ist damit der Weg, auf dem die
+ * hereingekommen ist. Die Drive-Strecke ist damit der Weg, auf dem die
  * "Erkennung" gelingt. Alles andere gilt als nicht erkannt und bleibt
  * unverändert, damit nicht jeder beliebige Beleg dieselben Daten bekommt.
  *
  * Für den Austausch gegen eine echte KI muss nur analysiereBeleg ersetzt
- * werden – sie bekäme dann die Datei des Belegs und würde sie auswerten.
+ * werden. Sie bekäme dann die Datei des Belegs und würde sie auswerten.
  */
 
 import { KI_DEMO_BELEG } from "../data/kiDemoBelege";
 
-// Eine echte Analyse dauert einige Sekunden – so wirkt die Vorführung echt
+// Eine echte Analyse dauert einige Sekunden, die Wartezeit bildet das nach
 const DAUER_MS = 2500;
 
 /**
