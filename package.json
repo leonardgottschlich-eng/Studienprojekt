@@ -7,9 +7,13 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "pdfjs:assets": "node scripts/copy-pdfjs-assets.mjs",
+    "postinstall": "node scripts/copy-pdfjs-assets.mjs"
   },
   "dependencies": {
+    "bootstrap-icons": "^1.13.1",
+    "pdfjs-dist": "^6.3.289",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
@@ -17,6 +21,7 @@
     "@eslint/js": "^9.39.4",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@vitejs/plugin-react": "^6.0.1",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",

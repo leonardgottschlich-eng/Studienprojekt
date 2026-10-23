@@ -22,3 +22,18 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Zugangsschluessel des Google-Dienstkontos, gehoert NIE ins Repository
+billsquid_server/service-account.json
+billsquid_server/.env
+
+# Hilfsdateien von pdf.js, werden aus node_modules kopiert
+# (npm run pdfjs:assets, laeuft auch nach npm install)
+public/pdfjs
+
+# Lokale Dev-Zertifikate (private Schluessel nie committen)
+certs/*
+!certs/README.md
+
+# Lokale Claude-Code-Konfiguration
+.claude/
